@@ -392,9 +392,10 @@ def search_fallback_database(query: str, limit: int = 15):
         # Score based on keyword hits in title and abstract
         scored = []
         words = query_lower.split()
+        matched_ids = {id(m) for m in matches}
         for p in FALLBACK_PAPERS:
             # Skip papers that are already in matches to avoid duplication
-            if p in matches:
+            if id(p) in matched_ids:
                 continue
             score = 0
             text = (p["title"] + " " + p["abstract"]).lower()
