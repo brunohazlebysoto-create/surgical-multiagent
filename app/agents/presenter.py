@@ -86,14 +86,19 @@ async def run_presenter_panel(
     - Meta-análisis: {meta_analysis}
     - Subconjunto de papers para la tabla de evidencia: {papers_json_str}
     
-    Debes estructurar el resultado en formato JSON estricto. Cada diapositiva debe tener obligatoriamente el campo "references" indicando los papers específicos utilizados para extraer esa información específica (por ejemplo: "Oomen et al. (2020)" o "Oomen et al. (2020), Hall et al. (2021)"). Si no hay un paper específico (por ejemplo en portadas o diapositivas metodológicas generales), puedes usar "Consenso de Expertos / Evidencia General".
+    Debes estructurar el resultado en formato JSON estricto. Cada diapositiva debe tener obligatoriamente el campo "references" indicando los papers específicos utilizados para extraer esa información específica (por ejemplo: "Oomen et al. (2020)" o "Oomen et al. (2020), Hall et al. (2021)"). Si no hay un paper específico, puedes usar "Consenso de Expertos / Evidencia General".
+    
+    Cada diapositiva debe incluir obligatoriamente un campo "speaker_notes" que contenga un guión dinámico, formal e informativo de 2-4 líneas en español que el cirujano ponente debe decir en voz alta al presentar este slide (ej. "En esta diapositiva observamos que...").
     
     Cada diapositiva debe tener uno de los siguientes layouts lógicos:
-    1. "title" (campos: "title", "subtitle", "references")
-    2. "bullet_points" (campos: "title", "bullets" - lista de strings, máximo 5 viñetas, "references". IMPORTANTE: Cada viñeta debe ser explicativa y detallar bien la idea en 1 o 2 frases largas y descriptivas, no solo palabras clave sueltas).
-    3. "comparison_table" (campos: "title", "headers" - lista de strings, "rows" - lista de listas de strings, máximo 3 columnas y 6 filas, "references")
-    4. "step_process" (campos: "title", "steps" - lista de strings detallando un proceso de manera descriptiva, "references")
-    5. "metrics" (campos: "title", "metric_value" - número o frase corta destacada, "metric_label" - descripción detallada de la métrica, "references")
+    1. "title" (campos: "title", "subtitle", "references", "speaker_notes")
+    2. "bullet_points" (campos: "title", "bullets" - lista de strings, máximo 5 viñetas, "references", "speaker_notes". IMPORTANTE: Cada viñeta debe ser explicativa y detallar bien la idea en 1 o 2 frases largas y descriptivas, no solo palabras clave sueltas).
+    3. "comparison_table" (campos: "title", "headers" - lista de strings, "rows" - lista de listas de strings, máximo 3 columnas y 6 filas, "references", "speaker_notes")
+    4. "comparison_2col" (campos: "title", "col1_title" - string, "col1_bullets" - lista de strings, "col2_title" - string, "col2_bullets" - lista de strings, "references", "speaker_notes")
+    5. "step_process" (campos: "title", "steps" - lista de strings detallando un proceso de manera descriptiva, "references", "speaker_notes")
+    6. "metrics" (campos: "title", "metric_value" - número o frase corta destacada, "metric_label" - descripción detallada de la métrica, "references", "speaker_notes")
+    7. "multimodal_chart" (campos: "title", "bullets" - lista de strings analizando una figura o imagen clínica, "references", "speaker_notes")
+    8. "forest_plot" (campos: "title", "bullets" - lista de strings interpretando los Odds Ratios del Forest Plot, "references", "speaker_notes")
     
     Instrucciones críticas:
     - Basa el orden clínico, las comparaciones y las descripciones directamente en los papers provistos, citándolos explícitamente en el texto de las viñetas (ej. 'Evidencia: Oomen et al.').
@@ -101,31 +106,33 @@ async def run_presenter_panel(
     - La Diapositiva de Tabla de Evidencia debe completarse utilizando los datos estructurados en: {papers_json_str}.
     
     Asegúrate de incluir y expandir detalladamente las siguientes secciones, dedicando múltiples diapositivas a las secciones complejas:
-    1. Título de la presentación
-    2. Objetivos académicos y clínicos
-    3. Introducción general y Epidemiología (incidencia, epidemiología pediátrica)
-    4. Embriología y Desarrollo Anátomopatológico (si aplica)
-    5. Fisiopatología detallada de la patología y cambios tisulares/funcionales
-    6. Anatomía Quirúrgica Pediátrica relevante y relaciones anatómicas de seguridad
-    7. Manifestaciones Clínicas y su presentación según grupo etario
-    8. Diagnóstico Clínico (anamnesis, examen físico, signos clínicos cardinales)
-    9. Diagnóstico por Imágenes (criterios cuantitativos de imagen, ultrasonido, radiografías u otros estudios relevantes)
-    10. Diagnóstico Diferencial de patologías pediátricas similares
-    11. Preparación Preoperatoria (corrección del estado ácido-base, hidroelectrolítico y estabilización)
-    12. Anestesia Pediátrica (consideraciones de vía aérea, inducción, monitorización y extubación segura en pediatría)
-    13. Técnica Quirúrgica Estándar Actual (paso a paso minucioso, abordajes tridimensionales y ventajas de la técnica estándar de elección actual)
-    14. Técnica Quirúrgica Abierta Clásica (paso a paso detallado y técnica abierta convencional)
-    15. Técnicas Quirúrgicas Históricas y Evolución (de las técnicas quirúrgicas iniciales hasta el estándar moderno)
-    16. Cuidados Postoperatorios Inmediatos y Esquemas de Alimentación/Cuidados progresivos
-    17. Algoritmos de Tratamiento por Scores: Indicaciones precisas de observación, tratamiento conservador/no quirúrgico o cirugía, con escalas de severidad claras.
-    18. Complicaciones Intraoperatorias (lesiones inadvertidas de estructuras vecinas, sangrado y su manejo)
-    19. Complicaciones Postoperatorias Tempranas y Tardías, detallando de manera obligatoria las frecuencias y porcentajes de incidencia reales según la literatura.
-    20. Seguimiento Clínico y Criterios de Alta Hospitalaria
-    21. Casos Clínicos Complejos y Desafíos Quirúrgicos (pacientes de bajo peso, prematuros o con comorbilidades)
-    22. Perlas Clínicas Quirúrgicas y Sabiduría Práctica
-    23. Errores Comunes en el Diagnóstico y en la Cirugía
-    24. Tabla de Evidencia Científica (con 6 estudios, usar layout comparison_table)
-    25. Conclusiones y Preguntas de Discusión para el equipo
+    1. Título de la presentación (layout "title")
+    2. Objetivos académicos y clínicos (layout "bullet_points")
+    3. Introducción general y Caso Clínico Simulado (Clinical Case Vignette) como gancho (layout "bullet_points")
+    4. Epidemiología (incidencia, prevalencia, factores de riesgo) (layout "metrics")
+    5. Embriología y Desarrollo Anátomopatológico (layout "bullet_points")
+    6. Fisiopatología detallada y cambios tisulares/funcionales (layout "bullet_points")
+    7. Anatomía Quirúrgica Pediátrica relevante y relaciones anatómicas de seguridad (layout "bullet_points")
+    8. Manifestaciones Clínicas y su presentación según grupo etario (layout "comparison_2col" o "comparison_table")
+    9. Diagnóstico Clínico (anamnesis, examen físico, signos clínicos cardinales) (layout "bullet_points")
+    10. Diagnóstico por Imágenes (criterios cuantitativos, ultrasonido, radiografía, etc.) (layout "multimodal_chart")
+    11. Diagnóstico Diferencial de patologías similares (layout "comparison_table")
+    12. Preparación Preoperatoria (regla Holiday-Segar 4-2-1, ayuno 2-4-6) (layout "bullet_points")
+    13. Anestesia Pediátrica (vía aérea, inducción, dosis seguras por peso) (layout "bullet_points")
+    14. Técnica Quirúrgica Estándar Actual (paso a paso minucioso) (layout "step_process")
+    15. Técnica Quirúrgica Abierta Clásica (paso a paso detallado) (layout "step_process")
+    16. Técnicas Quirúrgicas Históricas y Evolución (comparación) (layout "comparison_2col")
+    17. Cuidados Postoperatorios Inmediatos y Esquemas de Alimentación (layout "bullet_points")
+    18. Algoritmos de Tratamiento por Scores y Escalas de Severidad (layout "bullet_points")
+    19. Complicaciones Intraoperatorias (lesiones, sangrado) (layout "bullet_points")
+    20. Complicaciones Postoperatorias Tempranas y Tardías con porcentajes de incidencia reales (layout "bullet_points")
+    21. Seguimiento Clínico y Criterios de Alta Hospitalaria (layout "bullet_points")
+    22. Casos Clínicos Complejos y Desafíos (bajo peso, prematuros) (layout "bullet_points")
+    23. Perlas Clínicas Quirúrgicas y Sabiduría Práctica (layout "bullet_points")
+    24. Errores Comunes en el Diagnóstico y en la Cirugía (layout "bullet_points")
+    25. Tabla de Evidencia Científica (usar comparison_table con {papers_json_str})
+    26. Análisis Estadístico del Forest Plot de Eficacia (layout "forest_plot")
+    27. Conclusiones y Preguntas de Discusión para el equipo (layout "bullet_points")
     
     Genera un JSON con este formato estricto:
     {{
@@ -134,13 +141,15 @@ async def run_presenter_panel(
           "layout": "title",
           "title": "...",
           "subtitle": "...",
-          "references": "Consenso de Expertos / Evidencia General"
+          "references": "Consenso de Expertos / Evidencia General",
+          "speaker_notes": "..."
         }},
         {{
           "layout": "bullet_points",
           "title": "...",
           "bullets": ["...", "..."],
-          "references": "Oomen et al. (2020)"
+          "references": "Oomen et al. (2020)",
+          "speaker_notes": "..."
         }},
         ...
       ]
@@ -164,7 +173,8 @@ async def run_presenter_panel(
                         "Revisión de guías internacionales actualizadas y protocolos ERAS.",
                         "Enfoque multidisciplinario que incluye neonatología, anestesiología y cirugía pediátrica."
                     ],
-                    "references": "Consenso de Expertos / Evidencia General"
+                    "references": "Consenso de Expertos / Evidencia General",
+                    "speaker_notes": "En esta diapositiva abordamos aspectos clínicos y educativos adicionales para la mejora de la curva de aprendizaje."
                 })
     except Exception as e:
         logger.error(f"Error generating or parsing PPTX JSON: {e}. Usando fallback de slides.")
@@ -174,7 +184,8 @@ async def run_presenter_panel(
                 "layout": "title",
                 "title": f"Cirugía Infantil: {query.capitalize()}",
                 "subtitle": "Análisis de Evidencia Científica Multi-Agente",
-                "references": "Consenso de Expertos / Evidencia General"
+                "references": "Consenso de Expertos / Evidencia General",
+                "speaker_notes": "Bienvenidos a la presentación. Discutiremos los resultados del meta-análisis de evidencia científica."
             },
             {
                 "layout": "bullet_points",
@@ -185,7 +196,8 @@ async def run_presenter_panel(
                     "Sintetizar las dosis y pautas farmacológicas seguras por peso corporal (mg/kg).",
                     "Identificar brechas de conocimiento, complicaciones comunes y controversias clínicas."
                 ],
-                "references": "Consenso de Expertos / Evidencia General"
+                "references": "Consenso de Expertos / Evidencia General",
+                "speaker_notes": "Los objetivos de esta presentación se centran en analizar la evidencia disponible para optimizar los tratamientos."
             }
         ]
         # Completar a 40 slides por seguridad de fallback
@@ -198,7 +210,8 @@ async def run_presenter_panel(
                     "Estrategia de dosificación en mg/kg en anestesia y analgesia postoperatoria.",
                     "Seguimiento y criterios de alta segura para pacientes pediátricos."
                 ],
-                "references": "Cuerpo de Evidencia / Fallback Local"
+                "references": "Cuerpo de Evidencia / Fallback Local",
+                "speaker_notes": f"En esta diapositiva revisamos el soporte clínico detallado número {len(slides_list) + 1}."
             })
 
     await event_queue.put(programador.format_log(f"¡Esquema de diapositivas consolidado en JSON ({len(slides_list)} diapositivas detalladas) con éxito! Enviando el esquema estructurado final al **Sistema de Compilación** para renderizar los entregables .docx y .pptx.", "present"))

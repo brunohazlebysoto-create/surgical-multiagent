@@ -45,8 +45,9 @@ async def generate_document_chunk(
         Eres un Redactor Médico especializado en cirugía pediátrica.
         Escribe un manuscrito extremadamente detallado para las siguientes secciones del tema "{query}":
         
-        SECCIÓN 1: Introducción y Epidemiología
-        - Definición de la patología en pediatría, prevalencia, relación de sexo, incidencia y factores de riesgo.
+        SECCIÓN 1: Introducción, Caso Clínico de Gancho y Epidemiología
+        - Inicia la sección OBLIGATORIAMENTE con un Caso Clínico Simulado (Clinical Case Vignette) detallado como gancho inicial (edad del paciente pediátrico, síntomas de presentación, hallazgos físicos y exámenes iniciales de laboratorio o de imagen).
+        - Continúa con la definición de la patología en pediatría, prevalencia global y local, relación de sexo, incidencia y factores de riesgo.
         
         SECCIÓN 2: Embriología y Fisiopatología
         - Origen del defecto anatómico en el desarrollo embrionario (si aplica) y la fisiopatología detallada (alteraciones metabólicas, obstrucción, etc.).

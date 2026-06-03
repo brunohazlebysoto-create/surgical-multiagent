@@ -1,6 +1,9 @@
 import logging
 import os
 import base64
+import json
+import fitz
+import httpx
 from typing import Optional
 from docx import Document
 from pptx import Presentation
@@ -116,7 +119,7 @@ async def generate_document_abstract(text: str, filename: str, pdf_base64: Optio
         # Fallback simple
         return f"Documento subido '{filename}'. Contenido de texto extraído: {text[:500]}..."
 
-async def parse_uploaded_document(filepath: str, filename: str) -> dict:
+async def parse_uploaded_document(filepath: str, filename: str, run_id: Optional[str] = None) -> dict:
     """
     Orquesta la extracción del texto y la generación del abstract/resumen.
     Devuelve un diccionario estructurado como un 'paper'.
@@ -124,6 +127,7 @@ async def parse_uploaded_document(filepath: str, filename: str) -> dict:
     ext = os.path.splitext(filepath)[1].lower()
     text = ""
     pdf_base64 = None
+    extracted_imgs = []
     
     logger.info(f"Procesando archivo subido: {filename} ({ext})")
     
@@ -135,6 +139,13 @@ async def parse_uploaded_document(filepath: str, filename: str) -> dict:
             logger.warning(f"No se pudo extraer texto de PDF {filename}: {err}")
             text = ""
             
+        # Extraer e interpretar imágenes del PDF si se cuenta con run_id
+        if run_id:
+            try:
+                extracted_imgs = await extract_and_analyze_images(filepath, run_id)
+            except Exception as e:
+                logger.error(f"Error durante la extracción de imágenes de PDF: {e}")
+                
         # Codificar en Base64 para multimodal si tiene tamaño adecuado (<15MB)
         try:
             file_size = os.path.getsize(filepath)
@@ -164,8 +175,199 @@ async def parse_uploaded_document(filepath: str, filename: str) -> dict:
         "journal": "Documento Adjunto Local",
         "year": 2026,
         "doi": f"user_upload_{uuid_hash(filename)}",
-        "abstract": abstract
+        "abstract": abstract,
+        "extracted_images": extracted_imgs
     }
+
+async def extract_and_analyze_images(pdf_path: str, run_id: str) -> list:
+    """
+    Extrae imágenes del PDF usando PyMuPDF (fitz), las guarda en el directorio 
+    de descargas y las analiza usando Gemini Vision para catalogarlas y captionarlas.
+    """
+    images_metadata = []
+    if not run_id:
+        return images_metadata
+        
+    out_dir = f"static/downloads/{run_id}/extracted_images"
+    os.makedirs(out_dir, exist_ok=True)
+    
+    try:
+        doc = fitz.open(pdf_path)
+    except Exception as e:
+        logger.error(f"Error abriendo PDF con PyMuPDF: {e}")
+        return images_metadata
+        
+    image_count = 0
+    max_images = 10  # Para no agotar recursos
+    
+    for page_num in range(len(doc)):
+        if image_count >= max_images:
+            break
+            
+        page = doc[page_num]
+        image_list = page.get_images(full=True)
+        
+        for img_idx, img in enumerate(image_list):
+            if image_count >= max_images:
+                break
+                
+            xref = img[0]
+            base_image = doc.extract_image(xref)
+            image_bytes = base_image["image"]
+            image_ext = base_image["ext"]
+            
+            # Evitar decoraciones pequeñas
+            if len(image_bytes) < 10240:  # 10 KB
+                continue
+                
+            image_filename = f"fig_page_{page_num+1}_{img_idx+1}.{image_ext}"
+            image_path = os.path.join(out_dir, image_filename)
+            
+            with open(image_path, "wb") as f:
+                f.write(image_bytes)
+                
+            # Codificar imagen a base64 para Gemini Vision
+            img_b64 = base64.b64encode(image_bytes).decode("utf-8")
+            mime_type = f"image/{image_ext}"
+            if image_ext == "jpg":
+                mime_type = "image/jpeg"
+                
+            # Llamar a Gemini Vision
+            prompt = f"""
+            Actúa como un experto en imageneología y estadística clínica en cirugía pediátrica.
+            Analiza esta imagen extraída de un artículo científico (página {page_num+1}).
+            
+            Tu tarea:
+            1. Determina si la imagen es clínicamente relevante: ¿es un gráfico estadístico (barras, líneas, curvas de supervivencia, Forest Plot, etc.), un diagrama de flujo de pacientes (PRISMA, consorte), o una imagen diagnóstica/quirúrgica?
+            2. Si NO es relevante (por ejemplo, es un logo, un banner publicitario, una foto decorativa, o un icono simple), responde únicamente con "INVALIDO".
+            3. Si SÍ es relevante, genera:
+               - Un título científico conciso para la figura (ej: "Figura 1: Curva de supervivencia de Kaplan-Meier...").
+               - Una descripción detallada en español (3-4 líneas) interpretando los datos o hallazgos clínicos clave representados en la imagen.
+            
+            Tu respuesta debe estar estrictamente en formato JSON con la siguiente estructura:
+            {{
+              "status": "VALIDO" o "INVALIDO",
+              "title": "Título de la figura",
+              "caption": "Interpretación y descripción en español clínico"
+            }}
+            """
+            try:
+                vision_res = await call_gemini(
+                    prompt, 
+                    json_mode=True, 
+                    temperature=0.1, 
+                    inline_data={"mimeType": mime_type, "data": img_b64}
+                )
+                cleaned_res = vision_res.strip()
+                if cleaned_res.startswith("```"):
+                    cleaned_res = cleaned_res.replace("```json", "").replace("```", "").strip()
+                
+                analysis = json.loads(cleaned_res)
+                if analysis.get("status") == "VALIDO":
+                    relative_path = f"/static/downloads/{run_id}/extracted_images/{image_filename}"
+                    images_metadata.append({
+                        "file_path": image_path,
+                        "url": relative_path,
+                        "title": analysis.get("title", f"Figura {image_count+1}"),
+                        "caption": analysis.get("caption", ""),
+                        "page": page_num + 1
+                    })
+                    image_count += 1
+                    logger.info(f"Imagen válida extraída: {image_filename}")
+                else:
+                    os.remove(image_path)
+            except Exception as e:
+                logger.error(f"Error analizando imagen {image_filename}: {e}")
+                # Mantenerla como fallback simple
+                relative_path = f"/static/downloads/{run_id}/extracted_images/{image_filename}"
+                images_metadata.append({
+                    "file_path": image_path,
+                    "url": relative_path,
+                    "title": f"Figura {image_count+1} (Extraída)",
+                    "caption": "Figura clínica extraída del documento original.",
+                    "page": page_num + 1
+                })
+                image_count += 1
+                
+    return images_metadata
+
+async def download_pmc_figures(doi: str, run_id: str) -> list:
+    """
+    Consulta la API de Europe PMC para obtener y descargar figuras asociadas a un paper por su DOI.
+    """
+    figures = []
+    if not run_id or not doi:
+        return figures
+        
+    out_dir = f"static/downloads/{run_id}/extracted_images"
+    os.makedirs(out_dir, exist_ok=True)
+    
+    try:
+        # 1. Buscar PMCID por DOI
+        search_url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+        params = {
+            "query": f"doi:{doi}",
+            "format": "json",
+            "resultType": "lite"
+        }
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.get(search_url, params=params)
+            res.raise_for_status()
+            results = res.json().get("resultList", {}).get("result", [])
+            
+        if not results:
+            return figures
+            
+        pmcid = results[0].get("pmcid")
+        if not pmcid:
+            return figures
+            
+        # 2. Buscar imágenes asociadas a PMCID
+        images_url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/{pmcid}/images"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res_img = await client.get(images_url, params={"format": "json"})
+            if res_img.status_code != 200:
+                return figures
+            images_data = res_img.json().get("images", [])
+            
+        # 3. Descargar y registrar las imágenes (límite 3 por paper)
+        count = 0
+        for img in images_data[:3]:
+            img_url = img.get("urls", {}).get("large") or img.get("urls", {}).get("medium")
+            if not img_url:
+                continue
+                
+            img_caption = img.get("caption", "Figura de PubMed Central.")
+            img_title = img.get("title", f"Figura PMC ({pmcid})")
+            
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res_content = await client.get(img_url)
+                if res_content.status_code == 200:
+                    ext = "png"
+                    if "jpeg" in res_content.headers.get("content-type", ""):
+                        ext = "jpg"
+                    elif "gif" in res_content.headers.get("content-type", ""):
+                        ext = "gif"
+                        
+                    filename = f"pmc_{pmcid}_{count+1}.{ext}"
+                    filepath = os.path.join(out_dir, filename)
+                    with open(filepath, "wb") as f:
+                        f.write(res_content.content)
+                        
+                    relative_url = f"/static/downloads/{run_id}/extracted_images/{filename}"
+                    figures.append({
+                        "file_path": filepath,
+                        "url": relative_url,
+                        "title": img_title,
+                        "caption": img_caption,
+                        "doi": doi
+                    })
+                    count += 1
+                    logger.info(f"Descargada figura PMC {filename} de DOI: {doi}")
+    except Exception as e:
+        logger.error(f"Error descargando figuras de PMC para DOI {doi}: {e}")
+        
+    return figures
 
 def uuid_hash(name: str) -> str:
     """Genera un hash simple de 8 caracteres a partir del nombre del archivo."""

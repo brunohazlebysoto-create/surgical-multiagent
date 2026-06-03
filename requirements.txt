@@ -8,3 +8,5 @@ python-dotenv>=1.0.0
 tenacity>=8.2.2
 pypdf>=3.9.0
 python-multipart
+pymupdf>=1.22.0
+matplotlib>=3.7.0

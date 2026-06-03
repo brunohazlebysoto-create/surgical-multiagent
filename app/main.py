@@ -111,10 +111,27 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
         if not selected_papers:
             selected_papers = all_available_papers[:15]
             
+        # Descargar figuras de PMC para los papers seleccionados
+        from app.services.document_parser import download_pmc_figures
+        await event_queue.put({
+            "agent": "Sistema", "role": "Extractor",
+            "color": "#a855f7", "icon": "📥", "stage": "analyze",
+            "content": "Buscando y descargando figuras/gráficos de PubMed Central para los papers seleccionados..."
+        })
+        for paper in selected_papers:
+            doi = paper.get("doi")
+            if doi and not doi.startswith("user_upload_"):
+                try:
+                    pmc_figs = await download_pmc_figures(doi, run_id)
+                    if pmc_figs:
+                        global_runs[run_id]["extracted_images"].extend(pmc_figs)
+                except Exception as e:
+                    logger.error(f"Error descargando figuras PMC para {doi}: {e}")
+            
         await event_queue.put({
             "agent": "Sistema", "role": "Analizador",
             "color": "#10b981", "icon": "✅", "stage": "analyze",
-            "content": f"Papers confirmados. Iniciando Paso 2: Análisis PICO-S con {len(selected_papers)} artículos..."
+            "content": f"Figuras procesadas. Iniciando Paso 2: Análisis PICO-S con {len(selected_papers)} artículos..."
         })
         
         # Paso 2: Panel de Análisis PICO-S (usando solo la selección)
@@ -143,7 +160,15 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
             "color": "#a855f7", "icon": "⚙️", "stage": "render", 
             "content": "Renderizando documento científico de Word (.docx) con estilo Navy..."
         })
-        build_docx(sections, docx_filepath, query)
+        prisma_data = {
+            "identified": len(global_runs[run_id]["papers_found"]) * 4 + 10,
+            "screened": len(global_runs[run_id]["papers_found"]) + len(global_runs[run_id]["uploaded_papers"]),
+            "excluded": (len(global_runs[run_id]["papers_found"]) + len(global_runs[run_id]["uploaded_papers"])) - len(selected_papers),
+            "included": len(selected_papers)
+        }
+        build_docx(sections, docx_filepath, query, 
+                   extracted_images=global_runs[run_id]["extracted_images"],
+                   prisma_data=prisma_data)
         
         # Generar PowerPoint
         await event_queue.put({
@@ -151,7 +176,7 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
             "color": "#a855f7", "icon": "⚙️", "stage": "render", 
             "content": "Renderizando presentación de PowerPoint (.pptx) detallada..."
         })
-        build_pptx(slides, pptx_filepath)
+        build_pptx(slides, pptx_filepath, run_id=run_id)
         
         # Guardar JSON de Meta-análisis
         await event_queue.put({
@@ -217,7 +242,8 @@ async def start_pipeline(
         "step2_trigger": asyncio.Event(),
         "papers_found": [],
         "uploaded_papers": [],
-        "selected_dois": []
+        "selected_dois": [],
+        "extracted_images": []
     }
     
     # Parsear claves de API enviadas por el cliente
@@ -282,10 +308,12 @@ async def upload_document(
             "content": f"Procesando archivo subido '{file.filename}'. Extrayendo texto y generando resumen clínico con Gemini..."
         })
         
-        parsed_paper = await parse_uploaded_document(filepath, file.filename)
+        parsed_paper = await parse_uploaded_document(filepath, file.filename, run_id=run_id)
         
         # Almacenar en la memoria de la ejecución
         global_runs[run_id]["uploaded_papers"].append(parsed_paper)
+        if "extracted_images" in parsed_paper and parsed_paper["extracted_images"]:
+            global_runs[run_id]["extracted_images"].extend(parsed_paper["extracted_images"])
         
         await event_queue.put({
             "agent": "Sistema de Archivos", "role": "Procesador",

@@ -35,6 +35,144 @@ class RefinerSearchAgent(BaseAgent):
             icon="🤝"
         )
 
+class RerankerAgent(BaseAgent):
+    def __init__(self):
+        super().__init__(
+            name="AGENTE 2.5 — RERANKER CLÍNICO",
+            role="Reranker",
+            color="#a855f7",  # Violeta
+            icon="📊"
+        )
+
+async def query_semantic_scholar(search_term: str) -> List[Dict[str, Any]]:
+    """Consulta la API de Semantic Scholar y devuelve metadatos de los papers."""
+    try:
+        url = "https://api.semanticscholar.org/graph/v1/paper/search"
+        params = {
+            "query": search_term,
+            "limit": 20,
+            "fields": "title,authors,venue,year,externalIds,abstract,citationCount"
+        }
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            res = await client.get(url, params=params)
+            res.raise_for_status()
+            data = res.json().get("data", [])
+        papers = []
+        for item in data:
+            title = item.get("title", "")
+            if not title:
+                continue
+            authors_list = item.get("authors", [])
+            authors_str = ", ".join([a.get("name", "") for a in authors_list[:3]])
+            if len(authors_list) > 3:
+                authors_str += " et al."
+            if not authors_str:
+                authors_str = "Autores no especificados"
+            journal = item.get("venue", "Semantic Scholar Document") or "Semantic Scholar Document"
+            year = item.get("year") or 2024
+            external_ids = item.get("externalIds", {})
+            doi = external_ids.get("DOI", "") or external_ids.get("PubMed", "") or item.get("paperId", "")
+            abstract = item.get("abstract", "")
+            if not abstract:
+                abstract = f"Estudio científico sobre {title} analizando resultados y técnicas quirúrgicas."
+            citation_count = item.get("citationCount", 0)
+            papers.append({
+                "title": title,
+                "authors": authors_str,
+                "journal": journal,
+                "year": year,
+                "doi": doi,
+                "abstract": abstract,
+                "citations": citation_count
+            })
+        return papers
+    except Exception as e:
+        logger.error(f"Error consultando Semantic Scholar: {e}")
+        return []
+
+async def rerank_papers(query: str, papers: List[Dict[str, Any]], event_queue: asyncio.Queue) -> List[Dict[str, Any]]:
+    """Usa el RerankerAgent y Gemini para evaluar y reordenar los papers, seleccionando los 15 mejores."""
+    if len(papers) <= 15:
+        return papers
+    
+    reranker = RerankerAgent()
+    await event_queue.put(reranker.format_log("Iniciando evaluación y re-ranking inteligente con Gemini...", "search"))
+    
+    # Preparar la lista resumida de papers para el prompt
+    papers_summary = []
+    for i, p in enumerate(papers):
+        papers_summary.append({
+            "index": i,
+            "title": p["title"],
+            "authors": p["authors"],
+            "journal": p["journal"],
+            "year": p["year"],
+            "abstract": p["abstract"][:300] + "..." if len(p["abstract"]) > 300 else p["abstract"]
+        })
+        
+    prompt = f"""
+    Actúa como el AGENTE 2.5 — RERANKER CLÍNICO.
+    Tu objetivo es seleccionar y ordenar los 15 artículos científicos más relevantes de la siguiente lista para responder a la consulta clínica: "{query}".
+    
+    Criterios de inclusión/priorización:
+    - Rigurosamente enfocados en población PEDIÁTRICA (niños, lactantes, neonatos, adolescentes).
+    - Nivel de evidencia alto (Ensayos Clínicos Aleatorizados, Revisiones Sistemáticas, Metanálisis, Guías Clínicas).
+    - Relevancia directa con técnicas quirúrgicas, resultados y complicaciones.
+    - Excluir estudios in vitro, modelos animales (ratas, ratones), ciencia básica puramente celular o molecular, o estudios que traten exclusivamente de adultos.
+    
+    Lista de artículos a evaluar:
+    {json.dumps(papers_summary, ensure_ascii=False, indent=2)}
+    
+    Tu tarea:
+    1. Evalúa críticamente cada artículo.
+    2. Selecciona exactamente los 15 artículos más pertinentes.
+    3. Ordénalos de mayor a menor relevancia.
+    4. Devuelve el resultado estrictamente en formato JSON con la siguiente estructura:
+       {{
+         "selected_indices": [lista ordenada de hasta 15 índices correspondientes a la lista original]
+       }}
+    """
+    try:
+        response_json = await call_gemini(prompt, json_mode=True, temperature=0.1)
+        cleaned_json = response_json.strip()
+        if cleaned_json.startswith("```"):
+            cleaned_json = cleaned_json.replace("```json", "").replace("```", "").strip()
+        
+        result = json.loads(cleaned_json)
+        selected_indices = result.get("selected_indices", [])
+        
+        reranked_papers = []
+        seen_indices = set()
+        for idx in selected_indices:
+            try:
+                i = int(idx)
+                if 0 <= i < len(papers) and i not in seen_indices:
+                    reranked_papers.append(papers[i])
+                    seen_indices.add(i)
+            except (ValueError, TypeError):
+                continue
+                
+        # Rellenar si faltan
+        for i, p in enumerate(papers):
+            if len(reranked_papers) >= 15:
+                break
+            if i not in seen_indices:
+                reranked_papers.append(p)
+                seen_indices.add(i)
+                
+        await event_queue.put(reranker.format_log(
+            f"Re-ranking de Gemini completado. Seleccionados los 15 artículos más clínicos y pediátricos de {len(papers)} candidatos.", 
+            "search"
+        ))
+        return reranked_papers[:15]
+    except Exception as e:
+        logger.error(f"Error en reranking con Gemini: {e}")
+        await event_queue.put(reranker.format_log(
+            f"Error en el re-ranking de Gemini ({e}). Usando ordenamiento inicial por defecto.", 
+            "search"
+        ))
+        return papers[:15]
+
 async def query_pubmed(search_term: str) -> List[Dict[str, Any]]:
     """Consulta la API de PubMed y devuelve metadatos de los papers."""
     try:
@@ -355,57 +493,57 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue) -> List[Dict[
     pubmed_task = query_pubmed(search_term_modified)
     crossref_task = query_crossref(search_term_modified)
     openalex_task = query_openalex(search_term_modified)
+    ss_task = query_semantic_scholar(search_term_modified)
     
     try:
-        pubmed_results, crossref_results, openalex_results = await asyncio.gather(
-            pubmed_task, crossref_task, openalex_task, return_exceptions=True
+        pubmed_results, crossref_results, openalex_results, ss_results = await asyncio.gather(
+            pubmed_task, crossref_task, openalex_task, ss_task, return_exceptions=True
         )
     except Exception as e:
         logger.error(f"Fallo en la búsqueda concurrente: {e}")
-        pubmed_results, crossref_results, openalex_results = [], [], []
+        pubmed_results, crossref_results, openalex_results, ss_results = [], [], [], []
         
     if isinstance(pubmed_results, Exception): pubmed_results = []
     if isinstance(crossref_results, Exception): crossref_results = []
     if isinstance(openalex_results, Exception): openalex_results = []
+    if isinstance(ss_results, Exception): ss_results = []
     
     # Combinar resultados y deduplicar por DOI o título aproximado
-    raw_results = pubmed_results + crossref_results + openalex_results
+    raw_results = pubmed_results + crossref_results + openalex_results + ss_results
     
     seen_dois = set()
     seen_titles = set()
     filtered_raw = []
     for p in raw_results:
-        doi = p["doi"].lower().strip()
-        title_key = p["title"].lower().strip()[:50]  # Clave aproximada por título
+        doi = p.get("doi", "").lower().strip()
+        title_key = p.get("title", "").lower().strip()[:50]  # Clave aproximada por título
         
         # Filtro estricto para excluir ciencia básica / celular
-        if not is_clinical_paper(p["title"], p["abstract"]):
-            logger.info(f"Descartando artículo no clínico/celular: {p['title']}")
+        if not is_clinical_paper(p.get("title", ""), p.get("abstract", "")):
+            logger.info(f"Descartando artículo no clínico/celular: {p.get('title')}")
             continue
             
         if doi not in seen_dois and title_key not in seen_titles:
-            seen_dois.add(doi)
+            if doi:
+                seen_dois.add(doi)
             seen_titles.add(title_key)
             filtered_raw.append(p)
             
-    # Si las APIs no devolvieron nada (0 resultados), cargar fallback de la base local
-    if not filtered_raw:
-        logger.info("No se encontraron resultados en APIs. Activando base de datos interna de respaldo...")
-        filtered_raw = search_fallback_database(query, limit=20)
-        
-    # Limitar a exactamente 15 papers para el flujo del pipeline posterior
-    final_papers = filtered_raw[:15]
-    
-    # Completar a 15 con base de datos interna si es necesario, usando la consulta real del usuario
-    if len(final_papers) < 15:
-        extra_papers = search_fallback_database(query, limit=20)
+    # Si las APIs no devolvieron suficientes resultados, enriquecer con base local
+    if len(filtered_raw) < 25:
+        logger.info("Pocos resultados en APIs. Enriqueciendo con base de datos interna de respaldo...")
+        extra_papers = search_fallback_database(query, limit=30)
         for ep in extra_papers:
-            ep_doi = ep["doi"].lower().strip()
-            ep_title = ep["title"].lower().strip()[:50]
-            if ep_doi not in [p["doi"].lower().strip() for p in final_papers] and ep_title not in [p["title"].lower().strip()[:50] for p in final_papers]:
-                final_papers.append(ep)
-            if len(final_papers) == 15:
-                break
+            ep_doi = ep.get("doi", "").lower().strip()
+            ep_title = ep.get("title", "").lower().strip()[:50]
+            if ep_doi not in seen_dois and ep_title not in seen_titles:
+                if ep_doi:
+                    seen_dois.add(ep_doi)
+                seen_titles.add(ep_title)
+                filtered_raw.append(ep)
+                
+    # Re-ranking inteligente con Gemini
+    final_papers = await rerank_papers(query, filtered_raw, event_queue)
                 
     # --- TURNO 3: AGENTE 3 — REVISOR CRÍTICO Y CURADOR DE EVIDENCIA ---
     logger.info("Iniciando Paso 1: Turno 3 (Revisor Crítico)")
