@@ -4,6 +4,7 @@ import base64
 import json
 import fitz
 import httpx
+import asyncio
 from typing import Optional
 from docx import Document
 from pptx import Presentation
@@ -331,16 +332,16 @@ async def download_pmc_figures(doi: str, run_id: str) -> list:
             images_data = res_img.json().get("images", [])
             
         # 3. Descargar y registrar las imágenes (límite 3 por paper)
-        count = 0
+        valid_images = []
         for img in images_data[:3]:
             img_url = img.get("urls", {}).get("large") or img.get("urls", {}).get("medium")
-            if not img_url:
-                continue
+            if img_url:
+                valid_images.append((img_url, img))
                 
+        async def fetch_image(client, img_url, img, count):
             img_caption = img.get("caption", "Figura de PubMed Central.")
             img_title = img.get("title", f"Figura PMC ({pmcid})")
-            
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
                 res_content = await client.get(img_url)
                 if res_content.status_code == 200:
                     ext = "png"
@@ -355,15 +356,25 @@ async def download_pmc_figures(doi: str, run_id: str) -> list:
                         f.write(res_content.content)
                         
                     relative_url = f"/static/downloads/{run_id}/extracted_images/{filename}"
-                    figures.append({
+                    logger.info(f"Descargada figura PMC {filename} de DOI: {doi}")
+                    return {
                         "file_path": filepath,
                         "url": relative_url,
                         "title": img_title,
                         "caption": img_caption,
                         "doi": doi
-                    })
-                    count += 1
-                    logger.info(f"Descargada figura PMC {filename} de DOI: {doi}")
+                    }
+            except Exception as e:
+                logger.error(f"Error fetching image from {img_url}: {e}")
+            return None
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            tasks = [fetch_image(client, img_url, img, i) for i, (img_url, img) in enumerate(valid_images)]
+            results_gather = await asyncio.gather(*tasks)
+            for res in results_gather:
+                if res:
+                    figures.append(res)
+
     except Exception as e:
         logger.error(f"Error descargando figuras de PMC para DOI {doi}: {e}")
         
