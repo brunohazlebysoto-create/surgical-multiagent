@@ -160,14 +160,13 @@ class BaseAgent:
         self.icon = icon          # Ícono FontAwesome o Emoji (ej: "🔍")
 
     def format_log(self, text: str, stage: str) -> Dict[str, Any]:
-        """
-        Formatea la respuesta para enviarla a la cola SSE y renderizarla en el chat.
-        """
+        """Formatea un mensaje de log para enviarlo al frontend."""
         return {
+            "type": "log",
             "agent": self.name,
             "role": self.role,
-            "color": self.color,
-            "icon": self.icon,
+            "text": text,
             "stage": stage,
-            "content": text
+            "color": self.color,
+            "icon": self.icon
         }
