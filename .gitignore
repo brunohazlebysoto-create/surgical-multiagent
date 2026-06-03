@@ -1,0 +1,26 @@
+# Python cache and byte-code
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments
+.env
+.env.*
+.venv
+venv/
+ENV/
+env/
+
+# IDE configurations
+.vscode/
+.idea/
+
+# Application generated files
+static/downloads/*
+static/uploads/*
+!static/downloads/.gitkeep
+!static/uploads/.gitkeep

@@ -1,0 +1,703 @@
+document.addEventListener("DOMContentLoaded", () => {
+    // Elementos de Autenticación
+    const authOverlay = document.getElementById("auth-overlay");
+    const authPasswordInput = document.getElementById("auth-password-input");
+    const authSubmitBtn = document.getElementById("auth-submit-btn");
+    const authErrorMsg = document.getElementById("auth-error-msg");
+
+    async function checkAuthentication() {
+        const savedPassword = localStorage.getItem("access_password") || "";
+        try {
+            const res = await fetch(`/api/auth-check?password=${encodeURIComponent(savedPassword)}`);
+            const data = await res.json();
+            
+            if (data.status === "disabled" || data.status === "authenticated") {
+                authOverlay.classList.add("hidden");
+            } else {
+                authOverlay.classList.remove("hidden");
+            }
+        } catch (err) {
+            console.error("Error al comprobar la autenticación:", err);
+        }
+    }
+
+    // Comprobar autenticación en carga de página
+    checkAuthentication();
+
+    authSubmitBtn.addEventListener("click", performLogin);
+    authPasswordInput.addEventListener("keypress", (e) => {
+        if (e.key === "Enter") performLogin();
+    });
+
+    async function performLogin() {
+        const password = authPasswordInput.value;
+        authSubmitBtn.disabled = true;
+        authErrorMsg.classList.add("hidden");
+        
+        try {
+            const res = await fetch(`/api/auth-check?password=${encodeURIComponent(password)}`);
+            const data = await res.json();
+            
+            if (data.status === "authenticated" || data.status === "disabled") {
+                localStorage.setItem("access_password", password);
+                authOverlay.classList.add("hidden");
+            } else {
+                authErrorMsg.classList.remove("hidden");
+            }
+        } catch (err) {
+            console.error("Error al autenticar:", err);
+        } finally {
+            authSubmitBtn.disabled = false;
+        }
+    }
+
+    const queryInput = document.getElementById("query-input");
+    const startBtn = document.getElementById("start-btn");
+    const clearBtn = document.getElementById("clear-console-btn");
+    const connectionStatus = document.getElementById("connection-status");
+    const consoleStream = document.getElementById("console-stream");
+    const placeholderMsg = document.getElementById("console-placeholder-msg");
+    const downloadsPanel = document.getElementById("downloads-panel");
+    const suggestionTags = document.querySelectorAll(".suggestion-tag");
+    
+    // Elementos de la ampliación (Selección e Upload)
+    const selectionPanel = document.getElementById("selection-panel");
+    const papersContainer = document.getElementById("papers-selection-container");
+    const uploadDropzone = document.getElementById("upload-dropzone");
+    const fileUploader = document.getElementById("file-uploader");
+    const uploadedList = document.getElementById("uploaded-files-list");
+    const selectAllBtn = document.getElementById("select-all-btn");
+    const confirmBtn = document.getElementById("confirm-selection-btn");
+    const selectionCounter = document.getElementById("selection-counter");
+
+    // Botones de Descarga
+    const downloadWordBtn = document.getElementById("download-word-btn");
+    const downloadPptxBtn = document.getElementById("download-pptx-btn");
+    const downloadJsonBtn = document.getElementById("download-json-btn");
+
+    // Elementos del indicador de cuota API
+    const quotaCircleFill = document.getElementById("quota-circle-fill");
+    const quotaPercentage = document.getElementById("quota-percentage");
+    const quotaStatus = document.getElementById("quota-status");
+
+    function updateApiQuotaVisual(percentage, statusText, state = "normal") {
+        if (!quotaCircleFill || !quotaPercentage || !quotaStatus) return;
+        
+        quotaCircleFill.style.strokeDasharray = `${percentage}, 100`;
+        quotaPercentage.innerText = `${percentage}%`;
+        quotaStatus.innerText = statusText;
+        
+        quotaCircleFill.classList.remove("quota-warning", "quota-danger");
+        quotaStatus.classList.remove("quota-text-warning", "quota-text-danger");
+        
+        if (state === "warning") {
+            quotaCircleFill.classList.add("quota-warning");
+            quotaStatus.classList.add("quota-text-warning");
+        } else if (state === "danger") {
+            quotaCircleFill.classList.add("quota-danger");
+            quotaStatus.classList.add("quota-text-danger");
+        }
+    }
+
+    let eventSource = null;
+    let currentRunId = null;
+    let availablePapers = []; // Lista local de papers mostrados en el selector
+    let selectedDois = new Set();
+
+    // --- Sugerencias Rápidas ---
+    suggestionTags.forEach(tag => {
+        tag.addEventListener("click", () => {
+            queryInput.value = tag.getAttribute("data-query");
+        });
+    });
+
+    // --- Limpiar Consola ---
+    clearBtn.addEventListener("click", () => {
+        clearConsole();
+    });
+
+    function clearConsole() {
+        consoleStream.innerHTML = "";
+        consoleStream.appendChild(placeholderMsg);
+        placeholderMsg.classList.remove("hidden");
+    }
+
+    // --- Función para actualizar Nodos del Pipeline ---
+    function updatePipelineNodes(activeStage) {
+        const stages = ["search", "analyze", "meta_analyze", "write", "present", "render"];
+        const currentIndex = stages.indexOf(activeStage);
+        
+        stages.forEach((stage, idx) => {
+            const node = document.getElementById(`node-${stage}`);
+            if (!node) return;
+            
+            node.classList.remove("pending", "active", "completed");
+            
+            if (idx < currentIndex) {
+                node.classList.add("completed");
+            } else if (idx === currentIndex) {
+                node.classList.add("active");
+            } else {
+                node.classList.add("pending");
+            }
+        });
+    }
+
+    function resetPipelineNodes() {
+        const stages = ["search", "analyze", "meta_analyze", "write", "present", "render"];
+        stages.forEach(stage => {
+            const node = document.getElementById(`node-${stage}`);
+            if (node) {
+                node.classList.remove("active", "completed");
+                node.classList.add("pending");
+            }
+        });
+    }
+
+    function completeAllPipelineNodes() {
+        const stages = ["search", "analyze", "meta_analyze", "write", "present", "render"];
+        stages.forEach(stage => {
+            const node = document.getElementById(`node-${stage}`);
+            if (node) {
+                node.classList.remove("pending", "active");
+                node.classList.add("completed");
+            }
+        });
+    }
+
+    // --- Agregar Burbuja al Chat ---
+    function addChatBubble(data) {
+        placeholderMsg.classList.add("hidden");
+        
+        const bubble = document.createElement("div");
+        bubble.classList.add("chat-bubble");
+        
+        if (data.stage === "render" || data.role === "Procesador") {
+            bubble.classList.add("system-message");
+        } else if (data.stage === "completed") {
+            bubble.classList.add("completed-message");
+        } else if (data.stage === "failed") {
+            bubble.classList.add("failed-message");
+        }
+        
+        bubble.style.borderLeft = `4px solid ${data.color}`;
+        
+        const header = document.createElement("div");
+        header.classList.add("bubble-header");
+        
+        const iconBadge = document.createElement("span");
+        iconBadge.classList.add("agent-icon-badge");
+        iconBadge.style.color = data.color;
+        iconBadge.innerHTML = data.icon.startsWith("fa-") ? `<i class="${data.icon}"></i>` : data.icon;
+        
+        const nameSpan = document.createElement("span");
+        nameSpan.classList.add("agent-name");
+        nameSpan.style.color = data.color;
+        nameSpan.innerText = data.agent;
+        
+        const roleSpan = document.createElement("span");
+        roleSpan.classList.add("agent-role");
+        roleSpan.innerText = data.role;
+        
+        header.appendChild(iconBadge);
+        header.appendChild(nameSpan);
+        header.appendChild(roleSpan);
+        
+        const content = document.createElement("div");
+        content.classList.add("bubble-content");
+        content.innerText = data.content;
+        
+        bubble.appendChild(header);
+        bubble.appendChild(content);
+        
+        consoleStream.appendChild(bubble);
+        consoleStream.scrollTop = consoleStream.scrollHeight;
+    }
+
+    // --- RENDERIZAR LISTA DE SELECCIÓN DE PAPERS ---
+    function renderPapersList() {
+        papersContainer.innerHTML = "";
+        
+        availablePapers.forEach((paper) => {
+            const card = document.createElement("div");
+            card.classList.add("paper-selection-card");
+            if (selectedDois.has(paper.doi)) {
+                card.classList.add("selected");
+            }
+            
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.classList.add("paper-checkbox");
+            checkbox.checked = selectedDois.has(paper.doi);
+            checkbox.dataset.doi = paper.doi;
+            
+            checkbox.addEventListener("change", () => {
+                if (checkbox.checked) {
+                    selectedDois.add(paper.doi);
+                    card.classList.add("selected");
+                } else {
+                    selectedDois.delete(paper.doi);
+                    card.classList.remove("selected");
+                }
+                updateCounter();
+            });
+
+            const details = document.createElement("div");
+            details.classList.add("paper-card-details");
+            
+            const title = document.createElement("h4");
+            title.classList.add("paper-card-title");
+            title.innerText = paper.title;
+            
+            const meta = document.createElement("div");
+            meta.classList.add("paper-card-meta");
+            
+            // Badge según procedencia
+            const badge = document.createElement("span");
+            if (paper.authors.includes("Usuario")) {
+                badge.classList.add("badge-upload");
+                badge.innerText = "PROPIO";
+            } else {
+                badge.classList.add("badge-pubmed");
+                badge.innerText = "PUBMED/DB";
+            }
+            
+            const metaText = document.createTextNode(` | ${paper.authors} (${paper.year}) • ${paper.journal}`);
+            meta.appendChild(badge);
+            meta.appendChild(metaText);
+
+            // Botón y contenedor para expandir Abstract
+            const toggleBtn = document.createElement("button");
+            toggleBtn.classList.add("paper-abstract-toggle");
+            toggleBtn.innerHTML = `<i class="fa-solid fa-chevron-down"></i> Ver Resumen / Abstract`;
+            
+            const abstractDiv = document.createElement("div");
+            abstractDiv.classList.add("paper-abstract-content", "hidden");
+            abstractDiv.innerText = paper.abstract;
+            
+            toggleBtn.addEventListener("click", () => {
+                const isHidden = abstractDiv.classList.toggle("hidden");
+                toggleBtn.innerHTML = isHidden 
+                    ? `<i class="fa-solid fa-chevron-down"></i> Ver Resumen / Abstract`
+                    : `<i class="fa-solid fa-chevron-up"></i> Ocultar Resumen`;
+            });
+
+            details.appendChild(title);
+            details.appendChild(meta);
+            details.appendChild(toggleBtn);
+            details.appendChild(abstractDiv);
+            
+            card.appendChild(checkbox);
+            card.appendChild(details);
+            
+            papersContainer.appendChild(card);
+        });
+        
+        updateCounter();
+    }
+
+    function updateCounter() {
+        selectionCounter.innerText = `Artículos seleccionados: ${selectedDois.size}`;
+        confirmBtn.disabled = selectedDois.size < 1; // Al menos 1 seleccionado para continuar
+    }
+
+    // --- Seleccionar Todos / Ninguno ---
+    selectAllBtn.addEventListener("click", () => {
+        const allSelected = selectedDois.size === availablePapers.length;
+        
+        if (allSelected) {
+            selectedDois.clear();
+        } else {
+            availablePapers.forEach(p => selectedDois.add(p.doi));
+        }
+        
+        renderPapersList();
+    });
+
+    // --- GESTIÓN DE CARGA DE ARCHIVOS ---
+    uploadDropzone.addEventListener("click", () => {
+        fileUploader.click();
+    });
+
+    // Eventos drag and drop
+    ["dragenter", "dragover"].forEach(eventName => {
+        uploadDropzone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            uploadDropzone.classList.add("dragover");
+        }, false);
+    });
+
+    ["dragleave", "drop"].forEach(eventName => {
+        uploadDropzone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            uploadDropzone.classList.remove("dragover");
+        }, false);
+    });
+
+    uploadDropzone.addEventListener("drop", (e) => {
+        const dt = e.dataTransfer;
+        const files = dt.files;
+        handleFiles(files);
+    });
+
+    fileUploader.addEventListener("change", () => {
+        handleFiles(fileUploader.files);
+    });
+
+    function handleFiles(files) {
+        if (!currentRunId) {
+            alert("Primero debes iniciar el proceso con el botón 'Iniciar Consenso' para poder vincular tus archivos.");
+            return;
+        }
+        Array.from(files).forEach(uploadFile);
+    }
+
+    async function uploadFile(file) {
+        // Crear elemento visual de carga en la lista
+        const fileId = "file-" + Math.random().toString(36).substring(2, 9);
+        const item = document.createElement("div");
+        item.classList.add("uploaded-file-item");
+        item.id = fileId;
+        item.innerHTML = `
+            <div class="file-info">
+                <i class="fa-solid fa-file-medical"></i>
+                <span class="file-name" title="${file.name}">${file.name}</span>
+            </div>
+            <span class="file-status"><i class="fa-solid fa-spinner fa-spin"></i> Procesando...</span>
+        `;
+        uploadedList.appendChild(item);
+        uploadedList.scrollTop = uploadedList.scrollHeight;
+
+        const formData = new FormData();
+        formData.append("run_id", currentRunId);
+        formData.append("file", file);
+
+        try {
+            const response = await fetch("/api/upload", {
+                method: "POST",
+                headers: { "X-Access-Password": localStorage.getItem("access_password") || "" },
+                body: formData
+            });
+
+            if (!response.ok) {
+                throw new Error("Error en la subida.");
+            }
+
+            const data = await response.json();
+            
+            // Actualizar estado visual
+            const statusEl = item.querySelector(".file-status");
+            statusEl.innerHTML = `<i class="fa-solid fa-circle-check"></i> Listo`;
+            statusEl.style.color = "var(--success-color)";
+            
+            // Añadir el paper parseado por la IA al selector
+            availablePapers.unshift(data.paper); // Colocar al principio
+            selectedDois.add(data.paper.doi); // Seleccionar por defecto
+            
+            renderPapersList();
+
+        } catch (error) {
+            console.error(error);
+            const statusEl = item.querySelector(".file-status");
+            statusEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Error`;
+            statusEl.style.color = "var(--error-color)";
+        }
+    }
+
+    // --- CONFIRMAR SELECCIÓN (Reanuda el pipeline) ---
+    confirmBtn.addEventListener("click", async () => {
+        if (!currentRunId) return;
+
+        confirmBtn.disabled = true;
+        confirmBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Reanudando...`;
+        
+        // Bloquear zona de upload
+        uploadDropzone.style.pointerEvents = "none";
+        uploadDropzone.style.opacity = "0.5";
+        
+        try {
+            const response = await fetch(`/api/confirm/${currentRunId}`, {
+                method: "POST",
+                headers: { 
+                    "Content-Type": "application/json",
+                    "X-Access-Password": localStorage.getItem("access_password") || ""
+                },
+                body: JSON.stringify({ selected_dois: Array.from(selectedDois) })
+            });
+
+            if (!response.ok) {
+                throw new Error("Error al confirmar selección.");
+            }
+
+            // Ocultar panel de selección
+            selectionPanel.classList.add("hidden");
+            
+            // Reactivar animación de carga en botón principal
+            startBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Analizando...`;
+            
+        } catch (error) {
+            console.error(error);
+            alert("No se pudo reanudar el análisis. Inténtalo de nuevo.");
+            confirmBtn.disabled = false;
+            confirmBtn.innerHTML = `<i class="fa-solid fa-circle-check"></i> Confirmar y Continuar Análisis`;
+            uploadDropzone.style.pointerEvents = "auto";
+            uploadDropzone.style.opacity = "1";
+        }
+    });
+
+    // --- Iniciar Proceso (Llamada al Backend) ---
+    startBtn.addEventListener("click", async () => {
+        const query = queryInput.value.trim();
+        if (!query) {
+            alert("Por favor ingresa un tema de investigación quirúrgica.");
+            return;
+        }
+
+        // 1. Limpieza de UI
+        clearConsole();
+        resetPipelineNodes();
+        downloadsPanel.classList.add("hidden");
+        updateApiQuotaVisual(100, "Salud: 100%", "normal");
+        selectionPanel.classList.add("hidden");
+        uploadedList.innerHTML = "";
+        availablePapers = [];
+        selectedDois.clear();
+        
+        // Reactivar dropzone
+        uploadDropzone.style.pointerEvents = "auto";
+        uploadDropzone.style.opacity = "1";
+        confirmBtn.innerHTML = `<i class="fa-solid fa-circle-check"></i> Confirmar y Continuar Análisis`;
+
+        startBtn.disabled = true;
+        startBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Buscando papers...`;
+        
+        connectionStatus.className = "status-badge active";
+        connectionStatus.querySelector(".status-text").innerText = "Investigando";
+
+        if (eventSource) {
+            eventSource.close();
+        }
+
+        try {
+            const response = await fetch("/api/start", {
+                method: "POST",
+                headers: { 
+                    "Content-Type": "application/json",
+                    "X-Access-Password": localStorage.getItem("access_password") || ""
+                },
+                body: JSON.stringify({ query: query })
+            });
+
+            if (!response.ok) {
+                throw new Error("Fallo al iniciar.");
+            }
+
+            const data = await response.json();
+            currentRunId = data.run_id;
+            
+            // Conectarse a SSE
+            listenToEventStream(currentRunId);
+
+        } catch (error) {
+            console.error(error);
+            addChatBubble({
+                agent: "Sistema",
+                role: "Error",
+                color: "#ef4444",
+                icon: "❌",
+                stage: "failed",
+                content: `Error al iniciar: No se pudo conectar con el servidor.`
+            });
+            resetControls();
+        }
+    });
+
+    // --- Escuchar EventStream SSE ---
+    function listenToEventStream(runId) {
+        const savedPassword = localStorage.getItem("access_password") || "";
+        eventSource = new EventSource(`/api/stream/${runId}?password=${encodeURIComponent(savedPassword)}`);
+
+        eventSource.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                
+                // Agregar burbuja de chat
+                addChatBubble(data);
+                
+                // Actualizar pipeline de nodos
+                if (data.stage && !["completed", "failed", "selection_required"].includes(data.stage)) {
+                    updatePipelineNodes(data.stage);
+                    
+                    // Actualizar círculo de cuota API
+                    if (data.stage === "search") {
+                        updateApiQuotaVisual(95, "Salud: 95%", "normal");
+                    } else if (data.stage === "analyze") {
+                        updateApiQuotaVisual(70, "Salud: 70%", "normal");
+                    } else if (data.stage === "meta_analyze") {
+                        updateApiQuotaVisual(60, "Salud: 60%", "normal");
+                    } else if (data.stage === "write") {
+                        updateApiQuotaVisual(30, "Límite: 30%", "warning");
+                    } else if (data.stage === "present") {
+                        updateApiQuotaVisual(15, "Límite: 15%", "warning");
+                    } else if (data.stage === "render") {
+                        updateApiQuotaVisual(10, "Límite: 10%", "warning");
+                    }
+                }
+                
+                // CASO ESPECIAL: Se requiere interactividad del usuario
+                if (data.stage === "selection_required") {
+                    updatePipelineNodes("search");
+                    
+                    // Modificar estado de botón principal
+                    startBtn.innerHTML = `<i class="fa-solid fa-hourglass-half"></i> Esperando Selección...`;
+                    
+                    // Cargar los papers candidatos devueltos
+                    availablePapers = data.papers || [];
+                    
+                    // Seleccionar todos por defecto inicialmente
+                    selectedDois.clear();
+                    availablePapers.forEach(p => selectedDois.add(p.doi));
+                    
+                    renderPapersList();
+                    
+                    // Mostrar panel de selección y hacer scroll suave hacia él
+                    selectionPanel.classList.remove("hidden");
+                    selectionPanel.scrollIntoView({ behavior: "smooth" });
+                }
+                
+                // Si completó con éxito
+                if (data.stage === "completed") {
+                    eventSource.close();
+                    completeAllPipelineNodes();
+                    
+                    connectionStatus.className = "status-badge completed";
+                    connectionStatus.querySelector(".status-text").innerText = "Finalizado";
+                    
+                    setupDownloadLinks(runId);
+                    
+                    // Renderizar la biblioteca de evidencia utilizada
+                    renderEvidenceLibrary(data.selected_papers);
+                    
+                    downloadsPanel.classList.remove("hidden");
+                    downloadsPanel.scrollIntoView({ behavior: "smooth" });
+                    resetControls();
+                }
+                
+                // Si falló
+                if (data.stage === "failed") {
+                    eventSource.close();
+                    connectionStatus.className = "status-badge idle";
+                    connectionStatus.querySelector(".status-text").innerText = "Fallo";
+                    
+                    // Verificar si fue por límite de cuota
+                    const contentLower = (data.content || "").toLowerCase();
+                    if (contentLower.includes("quota") || contentLower.includes("429") || contentLower.includes("exhausted") || contentLower.includes("cuota")) {
+                        updateApiQuotaVisual(0, "Agotado (429)", "danger");
+                    } else {
+                        updateApiQuotaVisual(100, "Salud: 100%", "normal");
+                    }
+                    
+                    resetControls();
+                }
+
+            } catch (err) {
+                console.error("Error parseando evento SSE:", err);
+            }
+        };
+
+        eventSource.onerror = (err) => {
+            console.error("Error de EventSource SSE:", err);
+            eventSource.close();
+            resetControls();
+        };
+    }
+
+    // --- Configurar Enlaces de Descarga ---
+    function setupDownloadLinks(runId) {
+        downloadWordBtn.onclick = () => {
+            window.location.href = `/api/downloads/${runId}/word`;
+        };
+        downloadPptxBtn.onclick = () => {
+            window.location.href = `/api/downloads/${runId}/powerpoint`;
+        };
+        downloadJsonBtn.onclick = () => {
+            window.location.href = `/api/downloads/${runId}/json`;
+        };
+    }
+
+    // --- Renderizar Biblioteca de Evidencia ---
+    function renderEvidenceLibrary(papers) {
+        const container = document.getElementById("evidence-library-list");
+        if (!container) return;
+        
+        container.innerHTML = "";
+        
+        if (!papers || papers.length === 0) {
+            container.innerHTML = `<p class="empty-library">No se registraron artículos en esta ejecución.</p>`;
+            return;
+        }
+        
+        papers.forEach(paper => {
+            const item = document.createElement("div");
+            item.classList.add("library-item");
+            
+            const fileIcon = document.createElement("i");
+            if (paper.url.includes("/uploads/")) {
+                fileIcon.className = "fa-solid fa-file-pdf library-icon-pdf";
+            } else {
+                fileIcon.className = "fa-solid fa-file-lines library-icon-web";
+            }
+            
+            const details = document.createElement("div");
+            details.classList.add("library-details");
+            
+            const titleLink = document.createElement("a");
+            titleLink.href = paper.url;
+            titleLink.target = "_blank";
+            titleLink.innerText = paper.title;
+            titleLink.classList.add("library-title-link");
+            
+            const meta = document.createElement("span");
+            meta.classList.add("library-meta");
+            
+            const badge = document.createElement("span");
+            if (paper.url.includes("/uploads/")) {
+                badge.className = "badge-upload";
+                badge.innerText = "PDF SUBIDO";
+            } else {
+                badge.className = "badge-pubmed";
+                badge.innerText = "LITERATURA";
+            }
+            
+            const metaText = document.createTextNode(` | ${paper.authors} (${paper.year}) • ${paper.journal}`);
+            meta.appendChild(badge);
+            meta.appendChild(metaText);
+            
+            details.appendChild(titleLink);
+            details.appendChild(meta);
+            
+            item.appendChild(fileIcon);
+            item.appendChild(details);
+            
+            // Botón de descarga/acción
+            const actionBtn = document.createElement("a");
+            actionBtn.href = paper.url;
+            actionBtn.target = "_blank";
+            actionBtn.classList.add("btn", "btn-outline", "btn-xs", "library-action-btn");
+            if (paper.url.includes("/uploads/")) {
+                actionBtn.innerHTML = `<i class="fa-solid fa-download"></i> Descargar`;
+            } else {
+                actionBtn.innerHTML = `<i class="fa-solid fa-external-link"></i> Abrir`;
+            }
+            item.appendChild(actionBtn);
+            
+            container.appendChild(item);
+        });
+    }
+
+    // --- Resetear Controles ---
+    function resetControls() {
+        startBtn.disabled = false;
+        startBtn.innerHTML = `<i class="fa-solid fa-play"></i> Iniciar Consenso`;
+    }
+});

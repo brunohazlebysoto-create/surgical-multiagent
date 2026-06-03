@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quirófano Virtual - Consenso Quirúrgico Pediátrico Multi-Agente</title>
+    <!-- Google Fonts: Outfit & Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome para Íconos -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Estilos Personalizados -->
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <!-- AUTH OVERLAY -->
+    <div id="auth-overlay" class="auth-overlay hidden">
+        <div class="auth-card">
+            <i class="fa-solid fa-lock auth-lock-icon"></i>
+            <h2>Acceso Restringido</h2>
+            <p>Este Quirófano Virtual está protegido. Ingresa la contraseña de acceso para continuar.</p>
+            <div class="auth-input-group">
+                <input type="password" id="auth-password-input" placeholder="Contraseña de acceso...">
+                <button id="auth-submit-btn" class="btn btn-primary">
+                    <i class="fa-solid fa-key"></i> Entrar
+                </button>
+            </div>
+            <p id="auth-error-msg" class="auth-error hidden">Contraseña incorrecta. Inténtalo de nuevo.</p>
+        </div>
+    </div>
+
+    <div class="app-container">
+        <!-- HEADER -->
+        <header class="app-header">
+            <div class="logo-area">
+                <i class="fa-solid fa-laptop-medical logo-icon"></i>
+                <div>
+                    <h1>QUIRÓFANO VIRTUAL</h1>
+                    <p>Consenso Científico de Cirugía Infantil con IA Multi-Agente</p>
+                </div>
+            </div>
+            
+            <div class="header-widgets">
+                <!-- API Quota/Health Circle Widget -->
+                <div class="api-quota-widget" id="api-quota-widget">
+                    <div class="quota-circle-container">
+                        <svg class="quota-svg" viewBox="0 0 36 36">
+                            <path class="quota-circle-bg"
+                                d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                            />
+                            <path id="quota-circle-fill" class="quota-circle-fill"
+                                stroke-dasharray="100, 100"
+                                d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                            />
+                        </svg>
+                        <div class="quota-inner-text" id="quota-percentage">100%</div>
+                    </div>
+                    <div class="quota-label-group">
+                        <span class="quota-title">Llamadas API</span>
+                        <span class="quota-subtitle" id="quota-status">Salud: 100%</span>
+                    </div>
+                </div>
+                
+                <div class="status-indicator">
+                    <span id="connection-status" class="status-badge idle">
+                        <span class="status-dot"></span>
+                        <span class="status-text">Listo</span>
+                    </span>
+                </div>
+            </div>
+        </header>
+
+        <!-- MAIN LAYOUT -->
+        <main class="app-content">
+            <!-- INPUT PANEL -->
+            <section class="control-panel card">
+                <h2><i class="fa-solid fa-magnifying-glass-chart icon-accent"></i> Iniciar Investigación Clínica</h2>
+                <p class="panel-desc">Ingresa una patología o procedimiento quirúrgico pediátrico. El sistema buscará 15+ papers y activará el panel de 15 agentes expertos para debatir y compilar el apunte de Word y presentación PowerPoint.</p>
+                
+                <div class="input-group">
+                    <input type="text" id="query-input" placeholder="Ej: Estenosis hipertrófica del píloro: laparoscópica vs abierta..." value="Estenosis hipertrófica del píloro: laparoscópica vs abierta">
+                    <button id="start-btn" class="btn btn-primary">
+                        <i class="fa-solid fa-play"></i> Iniciar Consenso
+                    </button>
+                </div>
+
+                <div class="quick-suggestions">
+                    <span class="suggestion-tag" data-query="Estenosis hipertrófica del píloro: laparoscópica vs abierta">Estenosis Pilórica</span>
+                    <span class="suggestion-tag" data-query="Manejo no quirúrgico vs apendicectomía laparoscópica en apendicitis aguda pediátrica">Apendicitis Pediátrica</span>
+                    <span class="suggestion-tag" data-query="Atresia de vías biliares: portoenterostomía de Kasai laparoscópica vs abierta">Atresia de Vías Biliares</span>
+                </div>
+            </section>
+
+            <!-- SELECTION & UPLOAD PANEL (Pauses the flow) -->
+            <section class="selection-panel card hidden" id="selection-panel">
+                <h2><i class="fa-solid fa-rectangle-list icon-accent"></i> Selección e Incorporación de Evidencia</h2>
+                <p class="panel-desc">El Agente Buscador ha recopilado los siguientes candidatos. Puedes subir tus propios PDFs/Documentos médicos para integrarlos en el consenso. Selecciona los artículos y presiona "Confirmar" para reanudar el análisis.</p>
+                
+                <div class="selection-grid">
+                    <!-- LEFT COLUMN: FILE UPLOAD -->
+                    <div class="upload-area">
+                        <h3><i class="fa-solid fa-file-arrow-up icon-accent"></i> Cargar Documentos Propios</h3>
+                        <p class="section-desc">Arrastra o selecciona tus archivos PDF, Word (.docx) o PowerPoint (.pptx). La IA extraerá su texto y los resumirá como un paper clínico.</p>
+                        
+                        <div class="drop-zone" id="upload-dropzone">
+                            <i class="fa-solid fa-cloud-arrow-up dropzone-icon"></i>
+                            <span class="dropzone-text">Arrastra archivos aquí o haz clic para subir</span>
+                            <input type="file" id="file-uploader" accept=".pdf,.docx,.pptx" style="display: none;">
+                        </div>
+                        
+                        <div class="uploaded-files-list" id="uploaded-files-list">
+                            <!-- Los archivos subidos se listarán aquí -->
+                        </div>
+                    </div>
+
+                    <!-- RIGHT COLUMN: CANDIDATE PAPERS SELECTION -->
+                    <div class="papers-list-area">
+                        <div class="list-header">
+                            <h3><i class="fa-solid fa-book-bookmark icon-accent"></i> Artículos Candidatos</h3>
+                            <button id="select-all-btn" class="btn btn-outline btn-xs">Seleccionar Todos</button>
+                        </div>
+                        
+                        <div class="papers-scroll-container" id="papers-selection-container">
+                            <!-- Las tarjetas de papers con checkbox aparecerán aquí -->
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="selection-actions">
+                    <span class="selection-counter" id="selection-counter">Artículos seleccionados: 0</span>
+                    <button id="confirm-selection-btn" class="btn btn-primary" disabled>
+                        <i class="fa-solid fa-circle-check"></i> Confirmar y Continuar Análisis
+                    </button>
+                </div>
+            </section>
+
+            <!-- WORKSPACE SPLIT -->
+            <div class="workspace-grid">
+                <!-- WORKFLOW STAGES (LEFT) -->
+                <section class="workflow-section card">
+                    <h3><i class="fa-solid fa-network-wired icon-accent"></i> Pipeline del Consenso</h3>
+                    <div class="workflow-graph">
+                        <div class="workflow-node pending" id="node-search">
+                            <div class="node-icon-wrapper"><i class="fa-solid fa-search"></i></div>
+                            <div class="node-info">
+                                <h4>1. Búsqueda y Filtro</h4>
+                                <p>Recuperación de 15+ papers</p>
+                            </div>
+                            <div class="node-status"><i class="fa-solid fa-circle-notch fa-spin status-spinner"></i><i class="fa-solid fa-check status-check"></i></div>
+                        </div>
+
+                        <div class="workflow-node pending" id="node-analyze">
+                            <div class="node-icon-wrapper"><i class="fa-solid fa-flask"></i></div>
+                            <div class="node-info">
+                                <h4>2. Análisis PICO-S</h4>
+                                <p>Extracción paralela y calidad</p>
+                            </div>
+                            <div class="node-status"><i class="fa-solid fa-circle-notch fa-spin status-spinner"></i><i class="fa-solid fa-check status-check"></i></div>
+                        </div>
+
+                        <div class="workflow-node pending" id="node-meta_analyze">
+                            <div class="node-icon-wrapper"><i class="fa-solid fa-chart-line"></i></div>
+                            <div class="node-info">
+                                <h4>3. Meta-Análisis</h4>
+                                <p>GRADE y comparación cruzada</p>
+                            </div>
+                            <div class="node-status"><i class="fa-solid fa-circle-notch fa-spin status-spinner"></i><i class="fa-solid fa-check status-check"></i></div>
+                        </div>
+
+                        <div class="workflow-node pending" id="node-write">
+                            <div class="node-icon-wrapper"><i class="fa-solid fa-file-signature"></i></div>
+                            <div class="node-info">
+                                <h4>4. Redacción Médica</h4>
+                                <p>Apunte clínico &gt; 2000 palabras</p>
+                            </div>
+                            <div class="node-status"><i class="fa-solid fa-circle-notch fa-spin status-spinner"></i><i class="fa-solid fa-check status-check"></i></div>
+                        </div>
+
+                        <div class="workflow-node pending" id="node-present">
+                            <div class="node-icon-wrapper"><i class="fa-solid fa-file-powerpoint"></i></div>
+                            <div class="node-info">
+                                <h4>5. Presentación PPTX</h4>
+                                <p>Diapositivas Extensas e Ilustrativas</p>
+                            </div>
+                            <div class="node-status"><i class="fa-solid fa-circle-notch fa-spin status-spinner"></i><i class="fa-solid fa-check status-check"></i></div>
+                        </div>
+
+                        <div class="workflow-node pending" id="node-render">
+                            <div class="node-icon-wrapper"><i class="fa-solid fa-gears"></i></div>
+                            <div class="node-info">
+                                <h4>6. Generación de Archivos</h4>
+                                <p>Renderizado Word y PPTX</p>
+                            </div>
+                            <div class="node-status"><i class="fa-solid fa-circle-notch fa-spin status-spinner"></i><i class="fa-solid fa-check status-check"></i></div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- LIVE DEBATE CHAT (RIGHT) -->
+                <section class="console-section card">
+                    <div class="console-header">
+                        <h3><i class="fa-solid fa-comments icon-accent"></i> Debate Clínico de Agentes en Vivo</h3>
+                        <button id="clear-console-btn" class="btn btn-outline btn-xs"><i class="fa-solid fa-trash-can"></i> Limpiar</button>
+                    </div>
+                    <div class="console-body" id="console-stream">
+                        <div class="console-placeholder" id="console-placeholder-msg">
+                            <i class="fa-solid fa-stethoscope placeholder-icon"></i>
+                            <p>El canal de debate está inactivo. Configura tu tema médico arriba e inicia el consenso.</p>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- DOWNLOAD PANEL -->
+            <section class="downloads-panel card hidden" id="downloads-panel">
+                <h2><i class="fa-solid fa-circle-down icon-accent"></i> Entregables Científicos Generados</h2>
+                <p class="panel-desc">El consenso clínico ha culminado exitosamente. Descarga los materiales listos para su uso académico u hospitalario.</p>
+                <div class="downloads-buttons-grid">
+                    <button class="btn btn-download btn-word" id="download-word-btn">
+                        <i class="fa-solid fa-file-word icon-btn"></i>
+                        <div class="btn-text">
+                            <strong>Descargar Apunte Clínico</strong>
+                            <span>Documento Word (.docx) • 2000+ Palabras</span>
+                        </div>
+                    </button>
+
+                    <button class="btn btn-download btn-powerpoint" id="download-pptx-btn">
+                        <i class="fa-solid fa-file-powerpoint icon-btn"></i>
+                        <div class="btn-text">
+                            <strong>Descargar Presentación</strong>
+                            <span>Diapositivas PPTX • Extensa y Detallada (Tema Navy)</span>
+                        </div>
+                    </button>
+
+                    <button class="btn btn-download btn-json" id="download-json-btn">
+                        <i class="fa-solid fa-file-code icon-btn"></i>
+                        <div class="btn-text">
+                            <strong>Descargar Meta-Análisis</strong>
+                            <span>Estructura JSON de la Evidencia</span>
+                        </div>
+                    </button>
+                </div>
+
+                <!-- BIBLIOTECA DE EVIDENCIA -->
+                <div class="evidence-library-section" id="evidence-library-section">
+                    <h3><i class="fa-solid fa-book-open icon-accent"></i> Biblioteca de Evidencia Utilizada</h3>
+                    <p class="section-desc">Accede o descarga los artículos y documentos clínicos que formaron la base de este consenso.</p>
+                    <div class="evidence-library-list" id="evidence-library-list">
+                        <!-- Las tarjetas de los papers seleccionados con enlaces de descarga aparecerán aquí -->
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer class="app-footer">
+            <p>© 2026 Quirófano Virtual Multi-Agente • Desarrollado para Cirugía Infantil • Google Gemini Core</p>
+        </footer>
+    </div>
+
+    <!-- Script de lógica Frontend -->
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
