@@ -89,13 +89,44 @@ document.addEventListener("DOMContentLoaded", () => {
     const saveApiKeysBtn = document.getElementById("save-api-keys-btn");
 
     function getStoredGeminiKeys() {
-        const keys = JSON.parse(localStorage.getItem("gemini_api_keys")) || [];
+        let keys = [];
+        try {
+            const stored = localStorage.getItem("gemini_api_keys");
+            if (stored) {
+                const trimmed = stored.trim();
+                if (trimmed.startsWith("[")) {
+                    keys = JSON.parse(trimmed);
+                } else {
+                    keys = trimmed.split(",").map(k => k.trim());
+                }
+            }
+        } catch (e) {
+            console.error("Error al obtener claves API:", e);
+            keys = [];
+        }
+        if (!Array.isArray(keys)) {
+            keys = [];
+        }
         return keys.filter(k => k.trim().length > 0).join(",");
     }
 
     function initApiKeysUI() {
-        let savedKeys = JSON.parse(localStorage.getItem("gemini_api_keys")) || [];
-        if (savedKeys.length === 0) {
+        let savedKeys = [];
+        try {
+            const stored = localStorage.getItem("gemini_api_keys");
+            if (stored) {
+                const trimmed = stored.trim();
+                if (trimmed.startsWith("[")) {
+                    savedKeys = JSON.parse(trimmed);
+                } else {
+                    savedKeys = trimmed.split(",").map(k => k.trim());
+                }
+            }
+        } catch (e) {
+            console.error("Error al inicializar claves API UI:", e);
+            savedKeys = [];
+        }
+        if (!Array.isArray(savedKeys) || savedKeys.length === 0) {
             savedKeys = ["", ""];
         }
         renderApiKeyRows(savedKeys);
