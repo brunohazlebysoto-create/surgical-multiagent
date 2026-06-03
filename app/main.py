@@ -18,7 +18,7 @@ from app.agents.meta_analyst import run_meta_analyst_panel
 from app.agents.writer import run_writer_panel
 from app.agents.presenter import run_presenter_panel
 
-from app.services.docx_generator import build_docx
+from app.services.docx_generator import build_docx, DocxTemplateData
 from app.services.pptx_generator import build_pptx
 from app.services.document_parser import parse_uploaded_document
 
@@ -166,9 +166,15 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
             "excluded": (len(global_runs[run_id]["papers_found"]) + len(global_runs[run_id]["uploaded_papers"])) - len(selected_papers),
             "included": len(selected_papers)
         }
-        build_docx(sections, docx_filepath, query, 
-                   extracted_images=global_runs[run_id]["extracted_images"],
-                   prisma_data=prisma_data)
+
+        docx_data = DocxTemplateData(
+            sections=sections,
+            query=query,
+            extracted_images=global_runs[run_id]["extracted_images"],
+            prisma_data=prisma_data,
+            grade_data=None
+        )
+        build_docx(docx_filepath, docx_data)
         
         # Generar PowerPoint
         await event_queue.put({

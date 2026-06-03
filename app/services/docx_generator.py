@@ -1,7 +1,8 @@
 import os
 import re
 import logging
-from typing import Dict
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -337,14 +338,15 @@ def insert_extracted_images(doc, images: list, section_type: str):
                 except Exception as e:
                     logger.error(f"Error insertando imagen extraída en Word: {e}")
 
-def build_docx(
-    sections: Dict[str, str], 
-    filepath: str, 
-    query: str, 
-    extracted_images: list = None,
-    prisma_data: dict = None,
-    grade_data: list = None
-):
+@dataclass
+class DocxTemplateData:
+    sections: Dict[str, str]
+    query: str
+    extracted_images: Optional[List] = None
+    prisma_data: Optional[Dict] = None
+    grade_data: Optional[List] = None
+
+def build_docx(filepath: str, data: DocxTemplateData):
     """
     Compila todas las secciones generadas en un único archivo .docx estilizado.
     """
@@ -360,7 +362,7 @@ def build_docx(
         # Configurar Encabezado y Pie de página básicos
         header = section.header
         hp = header.paragraphs[0]
-        hp.text = f"Reporte Clínico Quirúrgico: {query.upper()}"
+        hp.text = f"Reporte Clínico Quirúrgico: {data.query.upper()}"
         hp.alignment = WD_ALIGN_PARAGRAPH.RIGHT
         hp.runs[0].font.size = Pt(8.5)
         hp.runs[0].font.italic = True
@@ -386,7 +388,7 @@ def build_docx(
 
     subtitle_p = doc.add_paragraph()
     subtitle_p.paragraph_format.space_after = Pt(36)
-    sub_run = subtitle_p.add_run(f"Tema: {query.upper()}\nSíntesis Multicéntrica de Evidencia con Consenso Multi-Agente")
+    sub_run = subtitle_p.add_run(f"Tema: {data.query.upper()}\nSíntesis Multicéntrica de Evidencia con Consenso Multi-Agente")
     sub_run.font.name = 'Arial'
     sub_run.font.size = Pt(14)
     sub_run.font.color.rgb = SLATE_COLOR
@@ -407,20 +409,20 @@ def build_docx(
     order = ["intro_embryo", "clinical_diag", "treatment_comp", "evidence_references"]
     
     for section_key in order:
-        text = sections.get(section_key, "")
+        text = data.sections.get(section_key, "")
         if text:
             parse_markdown_to_docx(doc, text)
             
             # Inyecciones específicas
             if section_key == "intro_embryo":
-                add_prisma_table(doc, query, prisma_data)
+                add_prisma_table(doc, data.query, data.prisma_data)
             elif section_key == "clinical_diag":
-                insert_extracted_images(doc, extracted_images, "diag")
+                insert_extracted_images(doc, data.extracted_images, "diag")
             elif section_key == "treatment_comp":
-                insert_extracted_images(doc, extracted_images, "treat")
+                insert_extracted_images(doc, data.extracted_images, "treat")
             elif section_key == "evidence_references":
-                insert_extracted_images(doc, extracted_images, "synthesis")
-                add_grade_table(doc, grade_data)
+                insert_extracted_images(doc, data.extracted_images, "synthesis")
+                add_grade_table(doc, data.grade_data)
                 
             # Agregar salto de página entre bloques principales para orden
             if section_key != order[-1]:
