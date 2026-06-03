@@ -80,6 +80,114 @@ document.addEventListener("DOMContentLoaded", () => {
     const quotaPercentage = document.getElementById("quota-percentage");
     const quotaStatus = document.getElementById("quota-status");
 
+    // --- LÓGICA DE CONFIGURACIÓN DE CLAVES API DE GEMINI ---
+    const apiSettingsBtn = document.getElementById("api-settings-btn");
+    const apiKeysModal = document.getElementById("api-keys-modal");
+    const closeApiModalBtn = document.getElementById("close-api-modal-btn");
+    const apiKeysListContainer = document.getElementById("api-keys-list-container");
+    const addApiKeyBtn = document.getElementById("add-api-key-btn");
+    const saveApiKeysBtn = document.getElementById("save-api-keys-btn");
+
+    function getStoredGeminiKeys() {
+        const keys = JSON.parse(localStorage.getItem("gemini_api_keys")) || [];
+        return keys.filter(k => k.trim().length > 0).join(",");
+    }
+
+    function initApiKeysUI() {
+        let savedKeys = JSON.parse(localStorage.getItem("gemini_api_keys")) || [];
+        if (savedKeys.length === 0) {
+            savedKeys = ["", ""];
+        }
+        renderApiKeyRows(savedKeys);
+    }
+
+    function renderApiKeyRows(keys) {
+        apiKeysListContainer.innerHTML = "";
+        keys.forEach(key => addApiKeyRow(key));
+    }
+
+    function addApiKeyRow(value = "") {
+        const row = document.createElement("div");
+        row.className = "api-key-row";
+        row.style.display = "flex";
+        row.style.gap = "8px";
+        row.style.alignItems = "center";
+        
+        const input = document.createElement("input");
+        input.type = "password";
+        input.className = "api-key-input";
+        input.placeholder = "AIzaSy...";
+        input.value = value;
+        input.style.flex = "1";
+        input.style.backgroundColor = "#0b1019";
+        input.style.border = "1px solid var(--border-color)";
+        input.style.borderRadius = "8px";
+        input.style.padding = "10px 14px";
+        input.style.color = "var(--text-primary)";
+        input.style.fontSize = "13px";
+        input.style.fontFamily = "monospace";
+        input.style.outline = "none";
+        
+        const toggleBtn = document.createElement("button");
+        toggleBtn.type = "button";
+        toggleBtn.className = "btn btn-outline btn-xs";
+        toggleBtn.style.padding = "10px";
+        toggleBtn.style.height = "38px";
+        toggleBtn.innerHTML = '<i class="fa-solid fa-eye-slash"></i>';
+        toggleBtn.onclick = () => {
+            if (input.type === "password") {
+                input.type = "text";
+                toggleBtn.innerHTML = '<i class="fa-solid fa-eye"></i>';
+            } else {
+                input.type = "password";
+                toggleBtn.innerHTML = '<i class="fa-solid fa-eye-slash"></i>';
+            }
+        };
+
+        const deleteBtn = document.createElement("button");
+        deleteBtn.type = "button";
+        deleteBtn.className = "btn btn-outline btn-xs";
+        deleteBtn.style.padding = "10px";
+        deleteBtn.style.height = "38px";
+        deleteBtn.style.color = "var(--error-color)";
+        deleteBtn.style.borderColor = "rgba(239, 68, 68, 0.2)";
+        deleteBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
+        deleteBtn.onclick = () => {
+            row.remove();
+        };
+
+        row.appendChild(input);
+        row.appendChild(toggleBtn);
+        row.appendChild(deleteBtn);
+        apiKeysListContainer.appendChild(row);
+    }
+
+    apiSettingsBtn.addEventListener("click", () => {
+        initApiKeysUI();
+        apiKeysModal.classList.remove("hidden");
+    });
+
+    closeApiModalBtn.addEventListener("click", () => {
+        apiKeysModal.classList.add("hidden");
+    });
+
+    addApiKeyBtn.addEventListener("click", () => {
+        addApiKeyRow("");
+    });
+
+    saveApiKeysBtn.addEventListener("click", () => {
+        const inputs = apiKeysListContainer.querySelectorAll(".api-key-input");
+        const keys = Array.from(inputs).map(inp => inp.value.trim()).filter(val => val.length > 0);
+        localStorage.setItem("gemini_api_keys", JSON.stringify(keys));
+        
+        saveApiKeysBtn.innerHTML = '<i class="fa-solid fa-check"></i> ¡Guardado!';
+        setTimeout(() => {
+            saveApiKeysBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Guardar';
+            apiKeysModal.classList.add("hidden");
+        }, 800);
+    });
+
+
     function updateApiQuotaVisual(percentage, statusText, state = "normal") {
         if (!quotaCircleFill || !quotaPercentage || !quotaStatus) return;
         
@@ -373,11 +481,17 @@ document.addEventListener("DOMContentLoaded", () => {
         formData.append("file", file);
 
         try {
+            const headers = { "X-Access-Password": localStorage.getItem("access_password") || "" };
+            const clientKeys = getStoredGeminiKeys();
+            if (clientKeys) {
+                headers["X-Gemini-API-Keys"] = clientKeys;
+            }
             const response = await fetch("/api/upload", {
                 method: "POST",
-                headers: { "X-Access-Password": localStorage.getItem("access_password") || "" },
+                headers: headers,
                 body: formData
             });
+
 
             if (!response.ok) {
                 throw new Error("Error en la subida.");
@@ -479,14 +593,20 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         try {
+            const headers = { 
+                "Content-Type": "application/json",
+                "X-Access-Password": localStorage.getItem("access_password") || ""
+            };
+            const clientKeys = getStoredGeminiKeys();
+            if (clientKeys) {
+                headers["X-Gemini-API-Keys"] = clientKeys;
+            }
             const response = await fetch("/api/start", {
                 method: "POST",
-                headers: { 
-                    "Content-Type": "application/json",
-                    "X-Access-Password": localStorage.getItem("access_password") || ""
-                },
+                headers: headers,
                 body: JSON.stringify({ query: query })
             });
+
 
             if (!response.ok) {
                 throw new Error("Fallo al iniciar.");

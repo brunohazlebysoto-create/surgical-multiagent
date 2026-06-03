@@ -71,12 +71,15 @@ class SearchRequest(BaseModel):
 class ConfirmRequest(BaseModel):
     selected_dois: List[str]
 
-async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, run_id: str):
+async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, run_id: str, client_keys: List[str] = None):
     """
     Orquesta el flujo del multi-agente.
     Pausa el flujo al finalizar el Paso 1 (Búsqueda) y espera confirmación del usuario.
     """
+    from app.agents.base import gemini_keys_context
+    token = gemini_keys_context.set(client_keys)
     try:
+
         # Paso 1: Panel de Búsqueda
         papers = await run_search_panel(query, event_queue)
         
@@ -188,9 +191,17 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
             "color": "#ef4444", "icon": "❌", "stage": "failed", 
             "content": f"Ocurrió un error crítico durante el análisis: {str(e)}"
         })
+    finally:
+        gemini_keys_context.reset(token)
+
 
 @app.post("/api/start")
-async def start_pipeline(request: SearchRequest, background_tasks: BackgroundTasks, _ = Depends(verify_access)):
+async def start_pipeline(
+    request: SearchRequest, 
+    background_tasks: BackgroundTasks, 
+    x_gemini_api_keys: Optional[str] = Header(None),
+    _ = Depends(verify_access)
+):
     """
     Endpoint para iniciar el pipeline asíncronamente en segundo plano.
     """
@@ -209,10 +220,16 @@ async def start_pipeline(request: SearchRequest, background_tasks: BackgroundTas
         "selected_dois": []
     }
     
-    # Agregar la tarea en segundo plano
-    background_tasks.add_task(execute_multiagent_pipeline, request.query, event_queue, run_id)
+    # Parsear claves de API enviadas por el cliente
+    client_keys = []
+    if x_gemini_api_keys:
+        client_keys = [k.strip() for k in x_gemini_api_keys.split(",") if k.strip()]
+    
+    # Agregar la tarea en segundo plano pasándole las claves
+    background_tasks.add_task(execute_multiagent_pipeline, request.query, event_queue, run_id, client_keys)
     
     return {"run_id": run_id}
+
 
 @app.post("/api/confirm/{run_id}")
 async def confirm_selection(run_id: str, request: ConfirmRequest, _ = Depends(verify_access)):
@@ -230,7 +247,12 @@ async def confirm_selection(run_id: str, request: ConfirmRequest, _ = Depends(ve
     return {"status": "success"}
 
 @app.post("/api/upload")
-async def upload_document(run_id: str = Form(...), file: UploadFile = File(...), _ = Depends(verify_access)):
+async def upload_document(
+    run_id: str = Form(...), 
+    file: UploadFile = File(...), 
+    x_gemini_api_keys: Optional[str] = Header(None),
+    _ = Depends(verify_access)
+):
     """
     Endpoint para cargar archivos de usuario (.pdf, .docx, .pptx) y procesar su texto.
     """
@@ -246,6 +268,12 @@ async def upload_document(run_id: str = Form(...), file: UploadFile = File(...),
         f.write(await file.read())
         
     # Parsear y generar abstract clínico
+    from app.agents.base import gemini_keys_context
+    client_keys = []
+    if x_gemini_api_keys:
+        client_keys = [k.strip() for k in x_gemini_api_keys.split(",") if k.strip()]
+        
+    token = gemini_keys_context.set(client_keys)
     try:
         event_queue = global_runs[run_id]["event_queue"]
         await event_queue.put({
@@ -270,6 +298,9 @@ async def upload_document(run_id: str = Form(...), file: UploadFile = File(...),
     except Exception as e:
         logger.exception("Error al subir y parsear archivo")
         raise HTTPException(status_code=500, detail=f"Error parseando el archivo: {str(e)}")
+    finally:
+        gemini_keys_context.reset(token)
+
 
 @app.get("/api/stream/{run_id}")
 async def stream_events(run_id: str, _ = Depends(verify_access)):

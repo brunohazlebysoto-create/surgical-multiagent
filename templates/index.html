@@ -30,6 +30,36 @@
         </div>
     </div>
 
+    <!-- API KEYS MODAL -->
+    <div id="api-keys-modal" class="auth-overlay hidden">
+        <div class="auth-card" style="max-width: 550px; width: 90%; align-items: stretch; gap: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 12px;">
+                <h3 style="margin: 0; font-family: var(--font-heading); font-weight: 700; color: var(--text-primary); font-size: 16px; display: flex; align-items: center; gap: 8px;">
+                    <i class="fa-solid fa-gears" style="color: var(--accent-primary);"></i> Claves de API Gemini
+                </h3>
+                <button id="close-api-modal-btn" class="btn btn-outline btn-xs" style="padding: 2px 8px; border: none; font-size: 18px; cursor: pointer; color: var(--text-secondary);">&times;</button>
+            </div>
+            
+            <p style="font-size: 12.5px; color: var(--text-secondary); text-align: left; margin: 0; line-height: 1.5;">
+                Ingresa tus claves de API de Gemini. Se guardan en el almacenamiento local del navegador y se transmiten para ejecutar los agentes. El sistema rotará de forma automática e inmediata si una clave excede el límite de cuota (error 429).
+            </p>
+            
+            <div id="api-keys-list-container" style="display: flex; flex-direction: column; gap: 10px; max-height: 250px; overflow-y: auto; padding-right: 4px; text-align: left;">
+                <!-- Las filas de claves se agregarán dinámicamente aquí -->
+            </div>
+            
+            <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 6px;">
+                <button id="add-api-key-btn" class="btn btn-outline btn-xs" style="padding: 6px 12px;">
+                    <i class="fa-solid fa-plus"></i> Agregar Celda
+                </button>
+                <button id="save-api-keys-btn" class="btn btn-primary btn-xs" style="padding: 6px 16px;">
+                    <i class="fa-solid fa-floppy-disk"></i> Guardar
+                </button>
+            </div>
+        </div>
+    </div>
+
+
     <div class="app-container">
         <!-- HEADER -->
         <header class="app-header">
@@ -62,12 +92,16 @@
                     </div>
                 </div>
                 
-                <div class="status-indicator">
-                    <span id="connection-status" class="status-badge idle">
+                <div class="status-indicator" style="display: flex; align-items: center; gap: 10px;">
+                    <button id="api-settings-btn" class="btn btn-outline btn-xs" style="padding: 6px 12px; height: 32px; border-radius: 20px;">
+                        <i class="fa-solid fa-key" style="color: var(--accent-primary);"></i> Claves API
+                    </button>
+                    <span id="connection-status" class="status-badge idle" style="height: 32px;">
                         <span class="status-dot"></span>
                         <span class="status-text">Listo</span>
                     </span>
                 </div>
+
             </div>
         </header>
 

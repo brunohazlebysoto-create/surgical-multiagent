@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import httpx
+import contextvars
 from typing import Dict, Any, Optional
 from app.core.config import GEMINI_API_KEYS, GEMINI_MODEL, GEMINI_PAUSE_SECONDS
 
@@ -14,6 +15,9 @@ _api_semaphore = asyncio.Semaphore(3)
 # Índice global para rotar las API Keys entre las llamadas concurrentes
 _current_key_idx = 0
 
+# Variable de contexto para almacenar llaves de API Gemini específicas de la ejecución actual (seguro contra asincronía)
+gemini_keys_context = contextvars.ContextVar("gemini_keys", default=None)
+
 async def call_gemini(
     prompt: str,
     system_instruction: Optional[str] = None,
@@ -24,16 +28,23 @@ async def call_gemini(
     """
     Función base asíncrona para realizar llamadas a la API de Google Gemini sin SDKs,
     usando httpx con rotación secuencial de llaves en caso de error 429 y semáforo de concurrencia.
+    Soporta la lectura de llaves desde un ContextVar para aislamiento entre usuarios.
     """
     global _current_key_idx
 
-    if not GEMINI_API_KEYS:
-        logger.error("No se han configurado GEMINI_API_KEYS en el archivo .env.")
-        return '{"error": "API Keys no configuradas"}' if json_mode else "Error: API Keys no configuradas en el archivo .env"
+    # Determinar qué grupo de llaves usar (las del contexto del cliente o las globales)
+    keys_to_use = gemini_keys_context.get()
+    if keys_to_use is None or len(keys_to_use) == 0:
+        keys_to_use = GEMINI_API_KEYS
 
-    num_keys = len(GEMINI_API_KEYS)
+    if not keys_to_use:
+        logger.error("No se han configurado llaves de Gemini (GEMINI_API_KEYS en .env o pasadas por el cliente).")
+        return '{"error": "API Keys no configuradas"}' if json_mode else "Error: API Keys no configuradas"
+
+    num_keys = len(keys_to_use)
 
     # Preparar el cuerpo de la petición (común para cualquier clave)
+
     contents = {
         "contents": [
             {
@@ -73,7 +84,8 @@ async def call_gemini(
         for attempt in range(max_attempts):
             # Obtener el índice actual de la llave
             key_idx = _current_key_idx
-            api_key = GEMINI_API_KEYS[key_idx]
+            api_key = keys_to_use[key_idx]
+
 
             # Si es un placeholder, rotarla inmediatamente y continuar
             if not api_key or "Placeholder" in api_key or api_key.startswith("KEY"):
