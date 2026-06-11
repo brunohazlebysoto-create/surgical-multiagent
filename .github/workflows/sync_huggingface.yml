@@ -15,11 +15,35 @@ jobs:
           fetch-depth: 0
           lfs: true
 
-      - name: Push to Hugging Face Spaces
+      - name: Validate HF_TOKEN
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [ -z "${HF_TOKEN}" ]; then
+            echo "::error::HF_TOKEN secret is empty or not set. Go to Settings > Secrets and variables > Actions and add HF_TOKEN."
+            exit 1
+          fi
+          echo "HF_TOKEN is set (length: ${#HF_TOKEN})"
+
+      - name: Push to Hugging Face Spaces (with retries)
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           git config user.email "action@github.com"
           git config user.name "GitHub Action"
           git remote add huggingface https://BrunoEduardo:${HF_TOKEN}@huggingface.co/spaces/BrunoEduardo/quirofano-virtual-pediatrico
-          git push huggingface main --force
+
+          for attempt in 1 2 3 4; do
+            echo "Push attempt ${attempt}/4..."
+            if git push huggingface main --force; then
+              echo "Push succeeded on attempt ${attempt}."
+              exit 0
+            fi
+            if [ ${attempt} -lt 4 ]; then
+              wait_seconds=$((attempt * attempt * 2))
+              echo "Push failed. Waiting ${wait_seconds}s before retry..."
+              sleep ${wait_seconds}
+            fi
+          done
+          echo "::error::All push attempts failed."
+          exit 1
