@@ -1,5 +1,7 @@
 # Fallback Database of Real Pediatric Surgery Papers
-# This file provides high-quality papers when internet APIs (PubMed/CrossRef) are unavailable or throttled.
+# This file provides high-quality papers when internet APIs (PubMed/CrossRef) are unavailable.
+# All papers belong to the single domain of pediatric surgery; no topic-based pre-filtering
+# is applied so that every paper competes equally on keyword relevance for any given query.
 
 FALLBACK_PAPERS = [
     # --- TÓPICO: ESTENOSIS HIPERTRÓFICA DEL PÍLORO (15 papers) ---
@@ -645,53 +647,32 @@ FALLBACK_PAPERS = [
     },
 ]
 
-# Quick search function to filter papers based on a query
-def search_fallback_database(query: str, limit: int = 15):
+def search_fallback_database(query: str, limit: int = 15) -> list:
+    """
+    Returns the most relevant papers from the fallback library using pure keyword
+    relevance scoring. No topic-based pre-filtering is applied: every paper in the
+    library competes equally against every query, avoiding any category bias.
+
+    Scoring:
+    - +2 per query word (>2 chars) matched in the title
+    - +1 per query word (>2 chars) matched in the abstract
+    - Ties are broken by publication year (newer first)
+    """
     query_lower = query.lower()
-    matches = []
+    words = [w for w in query_lower.split() if len(w) > 2]
 
-    # Identify search terms for all available topics
-    is_pyloric = any(x in query_lower for x in ["pylor", "pilor", "hps", "ehp", "stenosis", "estenosis"])
-    is_appendix = any(x in query_lower for x in ["append", "apend", "capp", "apendicitis", "appendectomy"])
-    is_biliary = any(x in query_lower for x in ["bili", "kasai", "atresia", "cholang", "colang"])
-    is_hernia = any(x in query_lower for x in ["hernia", "inguinal", "hernio", "escroto", "testis", "hidrocele"])
-    is_intussusception = any(x in query_lower for x in [
-        "intussus", "invaginac", "invagination", "telescop", "intussuscep"
-    ])
-    is_gastroschisis = any(x in query_lower for x in [
-        "gastros", "onfalo", "omphalo", "pared abdominal", "abdominal wall",
-        "gastroschisis", "onfalocele", "omphalocele"
-    ])
+    scored = []
+    for p in FALLBACK_PAPERS:
+        title_text = p.get("title", "").lower()
+        abstract_text = p.get("abstract", "").lower()
+        score = 0
+        for w in words:
+            if w in title_text:
+                score += 2
+            if w in abstract_text:
+                score += 1
+        scored.append((score, p["year"], p))
 
-    # Filter by topic priority
-    if is_pyloric:
-        matches = [p for p in FALLBACK_PAPERS if p["topic"] == "pyloric_stenosis"]
-    elif is_appendix:
-        matches = [p for p in FALLBACK_PAPERS if p["topic"] == "appendicitis"]
-    elif is_biliary:
-        matches = [p for p in FALLBACK_PAPERS if p["topic"] == "biliary_atresia"]
-    elif is_hernia:
-        matches = [p for p in FALLBACK_PAPERS if p["topic"] == "inguinal_hernia"]
-    elif is_intussusception:
-        matches = [p for p in FALLBACK_PAPERS if p["topic"] == "intussusception"]
-    elif is_gastroschisis:
-        matches = [p for p in FALLBACK_PAPERS if p["topic"] == "gastroschisis_omphalocele"]
-
-    # If no specific topic matched or we have too few, fill with keyword-scored papers
-    if len(matches) < limit:
-        scored = []
-        words = query_lower.split()
-        for p in FALLBACK_PAPERS:
-            if p in matches:
-                continue
-            score = 0
-            text = (p["title"] + " " + p["abstract"]).lower()
-            for w in words:
-                if len(w) > 2 and w in text:
-                    score += 1
-            scored.append((score, p))
-
-        scored.sort(key=lambda x: (x[0], x[1]["year"]), reverse=True)
-        matches.extend([item[1] for item in scored])
-
-    return matches[:limit]
+    # Sort by relevance score descending, then by year descending for ties
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return [p for _, _, p in scored[:limit]]
