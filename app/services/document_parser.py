@@ -5,15 +5,12 @@ import json
 import fitz
 import httpx
 from typing import Optional
-from docx import Document
-from pptx import Presentation
-from pypdf import PdfReader
-from app.agents.base import call_gemini
 
 logger = logging.getLogger("document_parser")
 
 def extract_text_from_pdf(filepath: str) -> str:
     """Extrae texto de un archivo PDF usando pypdf."""
+    from pypdf import PdfReader
     try:
         reader = PdfReader(filepath)
         text = ""
@@ -28,6 +25,7 @@ def extract_text_from_pdf(filepath: str) -> str:
 
 def extract_text_from_docx(filepath: str) -> str:
     """Extrae texto de un archivo de Word (.docx) usando python-docx."""
+    from docx import Document
     try:
         doc = Document(filepath)
         paragraphs = [p.text for p in doc.paragraphs if p.text]
@@ -45,6 +43,7 @@ def extract_text_from_docx(filepath: str) -> str:
 
 def extract_text_from_pptx(filepath: str) -> str:
     """Extrae texto de una presentación de PowerPoint (.pptx) usando python-pptx."""
+    from pptx import Presentation
     try:
         prs = Presentation(filepath)
         text = ""
@@ -63,6 +62,7 @@ async def generate_document_abstract(text: str, filename: str, pdf_base64: Optio
     Toma el texto completo extraído (o el PDF codificado en Base64 para modo multimodal)
     y usa Gemini para generar un resumen estructurado (Abstract) médico/quirúrgico de alta calidad.
     """
+    from app.agents.base import call_gemini
     if pdf_base64:
         prompt = f"""
         Eres un transcriptor y redactor médico especializado en cirugía infantil y medicina basada en evidencia.
@@ -184,6 +184,7 @@ async def extract_and_analyze_images(pdf_path: str, run_id: str) -> list:
     Extrae imágenes del PDF usando PyMuPDF (fitz), las guarda en el directorio 
     de descargas y las analiza usando Gemini Vision para catalogarlas y captionarlas.
     """
+    from app.agents.base import call_gemini
     images_metadata = []
     if not run_id:
         return images_metadata
