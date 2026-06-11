@@ -68,25 +68,37 @@ async def run_presenter_panel(
     # --- TURNO 3: PROGRAMADOR PPTX (Refinador / Generación del JSON de slides detalladas) ---
     await event_queue.put(programador.format_log("Entendido y directrices visuales del **Auditor Visual y Lógico** recibidas. Desarrollaré ideas completas en cada diapositiva y usaré los layouts idóneos. Generando estructura JSON detallada sin límite de diapositivas...", "present"))
     
-    # Enviar prompt para generar el JSON estructurado
-    # Extraer los 6 mejores papers para la tabla
+    # Extraer los 8 mejores papers con metadatos completos para la tabla de evidencia y citas
     papers_subset = []
-    for p in analyzed_papers[:6]:
+    for p in analyzed_papers[:8]:
+        authors_raw = p.get("authors", "N/A")
+        first_author = authors_raw.split(",")[0].strip()
+        citation_short = f"{first_author} et al. ({p['year']})" if "," in authors_raw else f"{first_author} ({p['year']})"
         papers_subset.append({
-            "study": f"{p['authors'].split(',')[0]} ({p['year']})",
+            "citation": citation_short,
+            "journal": p.get("journal", "N/A"),
+            "oxford": p["oxford_level"],
             "type": p["study_type"],
-            "findings": p["picos"]["O"][:120] + "..."
+            "intervention": p["picos"]["I"][:80],
+            "findings": p["picos"]["O"][:150] + ("..." if len(p["picos"]["O"]) > 150 else ""),
+            "doi": p.get("doi", "N/A")
         })
-        
+
     papers_json_str = json.dumps(papers_subset, ensure_ascii=False)
 
     prompt_pptx_json = f"""
-    Eres el Programador PPTX. Genera una lista completa y muy detallada de diapositivas clínicas explicativas sobre "{query}".
-    Utiliza esta información de soporte:
-    - Meta-análisis: {meta_analysis}
-    - Subconjunto de papers para la tabla de evidencia: {papers_json_str}
-    
-    Debes estructurar el resultado en formato JSON estricto. Cada diapositiva debe tener obligatoriamente el campo "references" indicando los papers específicos utilizados para extraer esa información específica (por ejemplo: "Oomen et al. (2020)" o "Oomen et al. (2020), Hall et al. (2021)"). Si no hay un paper específico, puedes usar "Consenso de Expertos / Evidencia General".
+    Eres el Programador PPTX. Genera una lista completa y muy detallada de diapositivas clínicas
+    explicativas sobre "{query}".
+    Información de soporte:
+    - Meta-análisis GRADE: {meta_analysis}
+    - Papers disponibles para citar (usa el campo "citation" de cada uno): {papers_json_str}
+
+    REGLA DE CITACIÓN OBLIGATORIA: El campo "references" de cada diapositiva DEBE contener la cita
+    en formato (Apellido et al., Año) del o los papers que respaldan esa diapositiva, tomando los
+    valores exactos del campo "citation" de la lista de papers. Cuando cites datos en las viñetas,
+    incluye la cita dentro del texto (ej. "LP: tiempo a alimentación completa 12h vs 18h en cirugía
+    abierta (Oomen et al., 2021)"). Solo usa "Consenso de Expertos / Evidencia General" si ningún
+    paper del corpus es relevante para esa diapositiva.
     
     Cada diapositiva debe incluir obligatoriamente un campo "speaker_notes" que contenga un guión dinámico, formal e informativo de 2-4 líneas en español que el cirujano ponente debe decir en voz alta al presentar este slide (ej. "En esta diapositiva observamos que...").
     

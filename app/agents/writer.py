@@ -33,111 +33,140 @@ class ChiefEditorAgent(BaseAgent):
         )
 
 async def generate_document_chunk(
-    chunk_id: int, 
-    query: str, 
-    meta_analysis: Dict[str, Any], 
+    chunk_id: int,
+    query: str,
+    meta_analysis: Dict[str, Any],
     papers_summary: str
 ) -> str:
     """Genera una sección del apunte clínico de forma detallada usando Gemini para garantizar extensión y rigor."""
-    
+
+    citation_rule = """
+        REGLA DE CITACIÓN OBLIGATORIA: Toda afirmación clínica, estadística, técnica o diagnóstica
+        DEBE ir acompañada de una cita explícita en el texto con el formato (Apellido et al., Año)
+        o (Apellido, Año) para autor único. Cita SOLO los papers de la 'Lista de referencias' a
+        continuación. Incluye MÍNIMO 5 citas por sección. Cada porcentaje, medida, dosis o hallazgo
+        clave debe tener su cita correspondiente."""
+
     prompts = {
         1: f"""
         Eres un Redactor Médico especializado en cirugía pediátrica.
         Escribe un manuscrito extremadamente detallado para las siguientes secciones del tema "{query}":
-        
+
         SECCIÓN 1: Introducción, Caso Clínico de Gancho y Epidemiología
-        - Inicia la sección OBLIGATORIAMENTE con un Caso Clínico Simulado (Clinical Case Vignette) detallado como gancho inicial (edad del paciente pediátrico, síntomas de presentación, hallazgos físicos y exámenes iniciales de laboratorio o de imagen).
-        - Continúa con la definición de la patología en pediatría, prevalencia global y local, relación de sexo, incidencia y factores de riesgo.
-        
+        - Inicia OBLIGATORIAMENTE con un Caso Clínico Simulado (Clinical Case Vignette) detallado
+          como gancho inicial (edad pediátrica, síntomas, hallazgos físicos, laboratorio e imágenes).
+        - Definición de la patología en pediatría, prevalencia global y local, relación de sexo,
+          incidencia y factores de riesgo con datos estadísticos concretos.
+
         SECCIÓN 2: Embriología y Fisiopatología
-        - Origen del defecto anatómico en el desarrollo embrionario (si aplica) y la fisiopatología detallada (alteraciones metabólicas, obstrucción, etc.).
-        
+        - Origen del defecto anatómico en el desarrollo embrionario y fisiopatología detallada
+          (alteraciones metabólicas, obstrucción, cascada fisiopatológica).
+
         Instrucciones de formato:
-        - Sé muy riguroso y académico.
         - Escribe un mínimo de 1000 palabras para estas dos secciones combinadas.
-        - Usa títulos en Markdown (H1 para secciones principales, H2 para subsecciones).
-        - Utiliza la siguiente información de meta-análisis y papers como contexto:
+        - Usa títulos en Markdown (# para secciones principales, ## para subsecciones).
+        {citation_rule}
+
+        Meta-análisis GRADE disponible:
         {meta_analysis}
+
+        Lista de referencias disponibles para citar (usa estas y solo estas):
+        {papers_summary}
         """,
-        
+
         2: f"""
         Eres un Redactor Médico especializado en cirugía pediátrica.
         Escribe un manuscrito extremadamente detallado para las siguientes secciones del tema "{query}":
-        
-        SECCIÓN 3: Manifestaciones Clínicas por Grupo Etario (neonato, lactante, preescolar, escolar, adolescente)
-        - Explica cómo varían los síntomas según la edad.
-        - Agrega porcentajes de frecuencia estadística para los síntomas principales (ej. qué porcentaje presenta dolor, vómito, fiebre, etc. según la literatura).
-        - Diseña una TABLA detallada en Markdown comparando las manifestaciones y sus frecuencias en porcentajes por grupo etario.
-        
+
+        SECCIÓN 3: Manifestaciones Clínicas por Grupo Etario
+        - Cómo varían síntomas según edad (neonato, lactante, preescolar, escolar, adolescente).
+        - Porcentajes de frecuencia estadística de síntomas principales según la literatura.
+        - TABLA en Markdown comparando manifestaciones con frecuencias en % por grupo etario.
+
         SECCIÓN 4: Diagnóstico
-        - Diagnóstico clínico (anamnesis, examen físico, signos cardinales).
-        - Laboratorio (alteraciones de laboratorio asociadas con dosis/límites).
-        - Diagnóstico por Imagen (ecografías, radiografías, tomografías u otros estudios con medidas y criterios cuantitativos exactos).
-        - Escalas Clínicas, Scores de Riesgo o Criterios de Severidad: Describe e inyecta una escala o score de riesgo específico de esta patología que actúe como guía de decisión clínica.
-        - Algoritmo de Tratamiento: Explica el algoritmo clínico dictado por dicho score (indicando cuándo proceder a observación activa/vigilancia, cuándo a tratamiento médico/conservador y cuándo a cirugía).
-        - Diagnóstico Diferencial en una TABLA detallada en Markdown.
-        
+        - Diagnóstico clínico (anamnesis, examen físico, signos cardinales con sensibilidad/especificidad).
+        - Laboratorio: alteraciones con valores cuantitativos exactos.
+        - Imagen: criterios cuantitativos exactos (medidas en mm, scores, etc.).
+        - Escala/Score clínico de severidad: descripción completa con puntos de corte y algoritmo de decisión.
+        - Diagnóstico Diferencial en TABLA Markdown.
+
         Instrucciones de formato:
-        - Sé muy riguroso y académico.
         - Escribe un mínimo de 1200 palabras para estas dos secciones combinadas.
         - Usa tablas Markdown estructuradas.
-        - Utiliza la siguiente información de meta-análisis y papers como contexto:
+        {citation_rule}
+
+        Meta-análisis GRADE disponible:
         {meta_analysis}
+
+        Lista de referencias disponibles para citar (usa estas y solo estas):
         {papers_summary}
         """,
-        
+
         3: f"""
         Eres un Redactor Médico especializado en cirugía pediátrica.
         Escribe un manuscrito extremadamente detallado para las siguientes secciones del tema "{query}":
-        
+
         SECCIÓN 5: Tratamiento
-        - Preparación preoperatoria: Manejo de líquidos y electrolitos usando reglas pediátricas como Holliday-Segar (4-2-1) y reposición de pérdidas. Corrección de desequilibrios metabólicos o electrolíticos específicos. Ayuno estricto con la regla 2-4-6 (líquidos claros, leche materna, sólidos/fórmulas).
-        - Anestesia pediátrica: Dosis de inducción y mantenimiento en mg/kg o mcg/kg (fentanilo, atropina, rocuronio, etc. según corresponda). Prevención de hipotermia.
-        - Tratamiento No Quirúrgico y Manejo Médico Conservador: Detalla detalladamente las opciones no quirúrgicas, terapia farmacológica/médica de soporte u observación clínica/vigilancia si corresponde según la escala de severidad específica de la patología.
-        - Técnicas Quirúrgicas (Ordenadas estrictamente de la más actual/utilizada a la más antigua/histórica):
-          * Para cada técnica, detalla minuciosamente los pasos quirúrgicos, instrumental, colocación de puertos/incisiones, abordajes tridimensionales y reparos anatómicos de seguridad para evitar complicaciones.
-          * Técnica Estándar Actual: abordaje de elección actual (ej. mínimamente invasivo/laparoscópico si aplica), colocación de puertos, presiones de neumoperitoneo correspondientes, pasos paso a paso desde el acceso inicial hasta el cierre final, incluyendo pruebas de seguridad anatómicas aplicables.
-          * Técnica Abierta Clásica: abordaje clásico convencional abierto, incisiones anatómicas, pasos detallados de disección, técnica específica y hemostasia cuidadosa.
-          * Técnicas Históricas o Alternativas: describe abordajes quirúrgicos previos u obsoletos detallando cómo evolucionaron hacia los métodos actuales.
-        - Cuidados postoperatorios: Manejo del dolor con esquemas analgésicos narcótico-free en mg/kg (ibuprofeno, paracetamol), reinicio de alimentación (ad-libitum vs graduado según la patología).
-        
+        - Preparación preoperatoria: Holliday-Segar (4-2-1), reposición de pérdidas, corrección
+          electrolítica, ayuno regla 2-4-6.
+        - Anestesia pediátrica: dosis de inducción y mantenimiento en mg/kg o mcg/kg (fentanilo,
+          propofol, ketamina, atropina, rocuronio, succinilcolina según corresponda).
+        - Tratamiento No Quirúrgico: opciones conservadoras con sus indicaciones según score clínico.
+        - Técnicas Quirúrgicas (de más actual/laparoscópica a más antigua/histórica):
+          * Técnica Estándar Actual: pasos detallados, colocación de puertos, presiones, reparos anatómicos.
+          * Técnica Abierta Clásica: incisiones, disección paso a paso, hemostasia.
+          * Técnicas Históricas: evolución hacia la técnica actual.
+        - Cuidados postoperatorios: analgesia narcótico-free en mg/kg, reinicio de alimentación.
+
         SECCIÓN 6: Complicaciones
-        - Divididas en: Intraoperatorias (lesiones inadvertidas de estructuras vecinas, sangrado), tempranas (infección de herida, dehiscencias, etc.) y tardías (recidiva, estenosis, hernias incisionales, etc.).
-        - **Es obligatorio incluir porcentajes exactos de incidencia o tasas de complicación** para cada evento según reporta la literatura científica.
-        
+        - Intraoperatorias, tempranas y tardías.
+        - OBLIGATORIO: porcentajes exactos de incidencia de cada complicación según la literatura.
+
         Instrucciones de formato:
-        - **Es obligatorio incluir dosis farmacológicas detalladas en mg/kg o mcg/kg.**
-        - Explica de forma sumamente detallada las técnicas quirúrgicas (de la más actual a la más antigua) sin escatimar en palabras.
-        - Escribe un mínimo de 1800 palabras para estas secciones de tratamiento y complicaciones, sin disminuir el detalle de las otras partes del documento.
-        - Utiliza la siguiente información de meta-análisis y papers como contexto:
+        - Dosis farmacológicas SIEMPRE en mg/kg o mcg/kg.
+        - Escribe un mínimo de 1800 palabras para estas secciones.
+        {citation_rule}
+
+        Meta-análisis GRADE disponible:
         {meta_analysis}
+
+        Lista de referencias disponibles para citar (usa estas y solo estas):
         {papers_summary}
         """,
-        
+
         4: f"""
         Eres un Redactor Médico especializado en cirugía pediátrica.
         Escribe un manuscrito extremadamente detallado para las siguientes secciones del tema "{query}":
-        
+
         SECCIÓN 7: Síntesis de Evidencia
-        - Resumen cruzado de la evidencia actual analizada por los paneles.
-        - Recomendación GRADE explicada (A, B, C o D).
-        
+        - Resumen cruzado comparando las técnicas o estrategias según los estudios analizados.
+        - Recomendación GRADE definitiva (A/B/C/D) con justificación basada en los papers.
+        - Brechas de conocimiento y controversias actuales.
+
         SECCIÓN 8: 10 Perlas Clínicas
-        - Una lista numerada con 10 recomendaciones clínicas prácticas de "sabiduría quirúrgica" pediátrica.
-        
-        SECCIÓN 9: Referencias
-        - Lista numerada únicamente de los papers y documentos analizados que te fueron proporcionados en el contexto (Autores. Título. Revista. Año. DOI/Local ID). No incluyas referencias externas.
-        
+        - Lista numerada con 10 recomendaciones de sabiduría quirúrgica pediátrica práctica.
+        - Cada perla debe citar el paper que la respalda.
+
+        SECCIÓN 9: Referencias (formato Vancouver)
+        - Lista numerada de TODOS los papers del contexto, en este formato:
+          [N] Apellido Iniciales, Apellido Iniciales. Título del artículo. Nombre Revista Abreviado.
+          Año;Volumen(Número):Páginas. DOI: XXXXX.
+        - Incluye TODOS los papers de la lista, sin omitir ninguno.
+
         Instrucciones de formato:
-        - Sé muy riguroso y académico.
-        - Escribe un mínimo de 800 palabras para estas secciones combinadas.
-        - Es obligatorio que bases tu redacción de forma estricta en el modelo de presentación y datos de los papers proporcionados en la lista de contexto, citando a los autores directamente (ej. 'Como describe Oomen et al. (2021)...').
-        - Utiliza la siguiente información de meta-análisis y papers como contexto:
+        - Escribe un mínimo de 800 palabras para las secciones 7 y 8.
+        - OBLIGATORIO: En la Sección 7, cita explícitamente a cada autor al mencionar sus hallazgos
+          (ej. 'Como demostraron Oomen et al. (2021) en su meta-análisis...' o
+          'Minneci et al. (2020) reportaron en JAMA...').
+
+        Meta-análisis GRADE disponible:
         {meta_analysis}
+
+        Lista de referencias disponibles para citar y listar en Sección 9:
         {papers_summary}
         """
     }
-    
+
     return await call_gemini(prompts[chunk_id], temperature=0.25)
 
 async def run_writer_panel(
@@ -178,8 +207,18 @@ async def run_writer_panel(
     await event_queue.put(editor.format_log(editor_msg, "write"))
 
     # --- FASE DE GENERACIÓN MODULAR DE TEXTO (CHUNKS) ---
-    # Resumen de papers para inyectar en los prompts
-    papers_summary_str = "\n".join([f"- {p['title']} ({p['year']}), PICO: {p['picos']['P']} -> {p['picos']['I']} vs {p['picos']['C']}. Oxford Nivel {p['oxford_level']}" for p in analyzed_papers])
+    # Resumen bibliográfico completo para citación en texto (autor, revista, DOI)
+    ref_lines = []
+    for i, p in enumerate(analyzed_papers):
+        authors_raw = p.get("authors", "Autores N/A")
+        first_author = authors_raw.split(",")[0].strip()
+        ref_lines.append(
+            f"[{i+1}] {authors_raw}. \"{p['title']}\". "
+            f"{p.get('journal', 'Revista N/A')}. {p['year']}. DOI: {p.get('doi', 'N/A')}.\n"
+            f"    Tipo: {p['study_type']} | Oxford: {p['oxford_level']} | Calidad: {p['methodological_quality']}/5\n"
+            f"    P: {p['picos']['P']} | I: {p['picos']['I']} | C: {p['picos']['C']} | O: {p['picos']['O']}"
+        )
+    papers_summary_str = "\n".join(ref_lines)
     
     sections = {}
     
