@@ -51,13 +51,18 @@ async def run_meta_analyst_panel(
     # Formatear el corpus analizado incluyendo autores, revista y DOI para citas correctas
     corpus_str = ""
     for i, p in enumerate(analyzed_papers):
+        abstract_excerpt = (p.get("abstract") or "").strip()
+        abstract_line = (
+            f"\n        Extracto del abstract: {abstract_excerpt[:300]}"
+            if abstract_excerpt else ""
+        )
         corpus_str += f"""
         Estudio {i+1}: {p.get('authors', 'N/A')}. "{p['title']}". {p.get('journal', 'N/A')}. {p['year']}. DOI: {p.get('doi', 'N/A')}.
         Tipo: {p['study_type']} | Nivel Oxford: {p['oxford_level']} | Calidad: {p['methodological_quality']}/5
         P: {p['picos']['P']}
         I: {p['picos']['I']}
         C: {p['picos']['C']}
-        O: {p['picos']['O']}
+        O: {p['picos']['O']}{abstract_line}
         ---
         """
 

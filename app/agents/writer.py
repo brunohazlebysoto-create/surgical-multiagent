@@ -212,11 +212,17 @@ async def run_writer_panel(
     for i, p in enumerate(analyzed_papers):
         authors_raw = p.get("authors", "Autores N/A")
         first_author = authors_raw.split(",")[0].strip()
+        abstract_excerpt = (p.get("abstract") or "").strip()
+        abstract_line = (
+            f"\n    Datos del abstract: {abstract_excerpt[:280]}"
+            if abstract_excerpt else ""
+        )
         ref_lines.append(
             f"[{i+1}] {authors_raw}. \"{p['title']}\". "
             f"{p.get('journal', 'Revista N/A')}. {p['year']}. DOI: {p.get('doi', 'N/A')}.\n"
             f"    Tipo: {p['study_type']} | Oxford: {p['oxford_level']} | Calidad: {p['methodological_quality']}/5\n"
             f"    P: {p['picos']['P']} | I: {p['picos']['I']} | C: {p['picos']['C']} | O: {p['picos']['O']}"
+            f"{abstract_line}"
         )
     papers_summary_str = "\n".join(ref_lines)
     

@@ -1,13 +1,17 @@
 import asyncio
 import json
 import logging
+import math
 import re
 import xml.etree.ElementTree as ET
+from datetime import datetime
 import httpx
 from typing import List, Dict, Any, Optional
 from app.agents.base import BaseAgent, call_gemini
 
 logger = logging.getLogger("multiagent_searcher")
+
+_CURRENT_YEAR = datetime.now().year
 
 
 class SearcherAgent(BaseAgent):
@@ -96,6 +100,88 @@ def _deduplicate(papers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Scoring determinista de calidad/relevancia
+# ---------------------------------------------------------------------------
+
+# Jerarquía de evidencia: el primer patrón que coincida define el peso base.
+_EVIDENCE_WEIGHTS = [
+    (("meta-analysis", "meta analysis", "metaanalysis", "metanálisis"), 10),
+    (("systematic review", "revisión sistemática", "cochrane"), 9),
+    (("randomized controlled", "randomised controlled", "randomized clinical",
+      "ensayo clínico aleatorizado", " rct "), 8),
+    (("practice guideline", "clinical guideline", "consensus statement",
+      "guía de práctica clínica"), 7),
+    (("prospective cohort", "multicenter", "multicentre", "multicéntrico"), 5),
+    (("cohort study", "case-control", "case control", "comparative study"), 4),
+    (("retrospective", "case series", "serie de casos"), 2),
+    (("case report", "reporte de caso"), 1),
+]
+
+
+def _evidence_score(text: str) -> int:
+    """Asigna un peso según el diseño de estudio detectado en título+abstract."""
+    for keywords, weight in _EVIDENCE_WEIGHTS:
+        if any(kw in text for kw in keywords):
+            return weight
+    return 3  # diseño neutro/no declarado
+
+
+def _score_paper(paper: Dict[str, Any], query_terms: List[str]) -> float:
+    """
+    Puntúa un paper combinando nivel de evidencia, recencia, citas, presencia de
+    abstract, relevancia pediátrica y solapamiento con la consulta. Usado para
+    pre-ordenar candidatos (mejor entrada al reranker y mejor fallback determinista).
+    """
+    title = (paper.get("title") or "").lower()
+    abstract = (paper.get("abstract") or "").lower()
+    text = f" {title} {abstract} "
+
+    # 1. Nivel de evidencia (factor dominante)
+    score = _evidence_score(text) * 3.0
+
+    # 2. Recencia: hasta +10 para el año en curso, decae ~1 punto/año
+    try:
+        year = int(paper.get("year") or 0)
+    except (TypeError, ValueError):
+        year = 0
+    if year:
+        score += max(0.0, 10.0 - (_CURRENT_YEAR - year))
+
+    # 3. Citas (Semantic Scholar): escala logarítmica suave, tope +8
+    citations = paper.get("citations") or 0
+    if citations > 0:
+        score += min(8.0, math.log1p(citations) * 1.8)
+
+    # 4. Presencia de abstract (imprescindible para extracción PICO-S)
+    if len(abstract) > 250:
+        score += 5.0
+    elif len(abstract) > 80:
+        score += 2.0
+    else:
+        score -= 4.0  # sin abstract ≈ inútil para el análisis posterior
+
+    # 5. Relevancia pediátrica explícita
+    if any(kw in text for kw in
+           ("pediat", "paediat", "child", "infan", "neonat", "newborn", "adolesc")):
+        score += 4.0
+
+    # 6. Solapamiento con términos de la consulta (el título pesa más)
+    for term in query_terms:
+        if term in title:
+            score += 1.5
+        elif term in abstract:
+            score += 0.5
+
+    return score
+
+
+def _rank_candidates(papers: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
+    """Ordena los candidatos por score determinista de calidad/relevancia (desc)."""
+    query_terms = [w for w in re.split(r"\W+", query.lower()) if len(w) > 3]
+    return sorted(papers, key=lambda p: _score_paper(p, query_terms), reverse=True)
+
+
+# ---------------------------------------------------------------------------
 # API Queries
 # ---------------------------------------------------------------------------
 
@@ -106,15 +192,29 @@ async def query_pubmed(search_term: str, max_results: int = 30) -> List[Dict[str
       2. efetch XML → obtiene título, autores, revista, año, DOI y ABSTRACT REAL
     """
     try:
-        # Paso 1: obtener IDs
+        # Paso 1: obtener IDs (restringido a humanos y ordenado por relevancia)
         async with httpx.AsyncClient(timeout=15.0) as client:
             res = await client.get(
                 "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
-                params={"db": "pubmed", "term": search_term,
-                        "retmode": "json", "retmax": str(max_results)}
+                params={"db": "pubmed",
+                        "term": f"({search_term}) AND humans[MeSH Terms]",
+                        "retmode": "json", "retmax": str(max_results),
+                        "sort": "relevance"}
             )
             res.raise_for_status()
             id_list = res.json().get("esearchresult", {}).get("idlist", [])
+
+        # Si el filtro de humanos deja la búsqueda vacía, reintentar sin él
+        if not id_list:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.get(
+                    "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+                    params={"db": "pubmed", "term": search_term,
+                            "retmode": "json", "retmax": str(max_results),
+                            "sort": "relevance"}
+                )
+                res.raise_for_status()
+                id_list = res.json().get("esearchresult", {}).get("idlist", [])
 
         if not id_list:
             return []
@@ -602,6 +702,11 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue) -> List[Dict[
             f"muy especializada. El análisis continuará con los papers disponibles.",
             "search"
         ))
+
+    # ── PRE-RANKING DETERMINISTA (calidad/recencia/citas/abstract) ────────
+    # Ordena por score antes del reranker: mejora la entrada del modelo y, sobre
+    # todo, garantiza que el fallback (si Gemini falla) conserve los mejores papers.
+    all_candidates = _rank_candidates(all_candidates, query)
 
     # ── RERANKING con Gemini ──────────────────────────────────────────────
     final_papers = await rerank_papers(query, all_candidates, event_queue, target=15)

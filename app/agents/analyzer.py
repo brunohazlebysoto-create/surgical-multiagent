@@ -108,6 +108,7 @@ async def run_analyzer_panel(papers: List[Dict[str, Any]], event_queue: asyncio.
                 "journal": p["journal"],
                 "year": p["year"],
                 "doi": p["doi"],
+                "abstract": p.get("abstract", ""),
                 "picos": {
                     "P": analysis.get("population", "Población infantil"),
                     "I": analysis.get("intervention", "Intervención quirúrgica"),
@@ -129,6 +130,7 @@ async def run_analyzer_panel(papers: List[Dict[str, Any]], event_queue: asyncio.
                 "journal": p["journal"],
                 "year": p["year"],
                 "doi": p["doi"],
+                "abstract": p.get("abstract", ""),
                 "picos": {
                     "P": "Población infantil",
                     "I": "Intervención quirúrgica",
