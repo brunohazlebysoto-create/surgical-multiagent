@@ -500,10 +500,15 @@ document.addEventListener("DOMContentLoaded", () => {
         item.innerHTML = `
             <div class="file-info">
                 <i class="fa-solid fa-file-medical"></i>
-                <span class="file-name" title="${file.name}">${file.name}</span>
+                <span class="file-name"></span>
             </div>
             <span class="file-status"><i class="fa-solid fa-spinner fa-spin"></i> Procesando...</span>
         `;
+
+        const fileNameSpan = item.querySelector('.file-name');
+        fileNameSpan.textContent = file.name;
+        fileNameSpan.title = file.name;
+
         uploadedList.appendChild(item);
         uploadedList.scrollTop = uploadedList.scrollHeight;
 
