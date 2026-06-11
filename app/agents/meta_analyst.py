@@ -48,11 +48,11 @@ async def run_meta_analyst_panel(
     
     logger.info("Iniciando Paso 3: Panel de Meta-Análisis Optimizado")
     
-    # Formatear el corpus analizado
+    # Formatear el corpus analizado incluyendo autores, revista y DOI para citas correctas
     corpus_str = ""
     for i, p in enumerate(analyzed_papers):
         corpus_str += f"""
-        Estudio {i+1}: {p['title']} ({p['year']})
+        Estudio {i+1}: {p.get('authors', 'N/A')}. "{p['title']}". {p.get('journal', 'N/A')}. {p['year']}. DOI: {p.get('doi', 'N/A')}.
         Tipo: {p['study_type']} | Nivel Oxford: {p['oxford_level']} | Calidad: {p['methodological_quality']}/5
         P: {p['picos']['P']}
         I: {p['picos']['I']}
@@ -62,22 +62,31 @@ async def run_meta_analyst_panel(
         """
 
     prompt_consolidated = f"""
-    Eres el coordinador del panel de meta-análisis. Debes generar el debate clínico entre el Sintetizador de Evidencia y el Opositor de Sesgos, además de consolidar la síntesis final de evidencia sobre "{query}".
-    
-    Corpus de estudios clínicos analizados:
+    Eres el coordinador del panel de meta-análisis. Genera el debate clínico entre el Sintetizador
+    de Evidencia y el Opositor de Sesgos, y consolida la síntesis final de evidencia sobre "{query}".
+
+    Corpus de estudios clínicos analizados (con autores completos para citación):
     {corpus_str}
-    
-    Debes generar un resultado en formato JSON estricto con las siguientes claves:
-    1. "synthesizer_log": Diálogo del Sintetizador de Evidencia (Paso 3, Turno 1). Confirma la recepción de las fichas PICO-S del Paso 2, propone un nivel global preliminar y grado GRADE (A, B, C o D), compara brevemente técnicas, y pasa la palabra al Opositor (140-180 palabras).
-    2. "bias_opponent_log": Diálogo de Opositor de Sesgos (Paso 3, Turno 2). Cuestiona rigurosamente la propuesta, indica gaps de conocimiento, sesgos de cirujanos sobre laparoscopia y desafía el grado si es necesario (130-170 palabras).
-    3. "meta_analysis": Objeto que contiene las siguientes claves de la síntesis formal:
-       - "global_evidence_level": Resumen del nivel de evidencia global (ej. "Predominantemente Nivel 2b").
-       - "grade_recommendation": Recomendación GRADE definitiva (A, B, C o D) con justificación corta.
-       - "comparison_findings": Comparación de técnicas clínicas según el corpus.
-       - "knowledge_gaps": Lista de brechas de conocimiento identificadas.
-       - "controversies": Lista de controversias o debates en la comunidad quirúrgica pediátrica sobre este tema.
-       - "clinical_implications": Recomendaciones prácticas para la toma de decisiones clínicas.
-       
+
+    REGLA DE CITACIÓN: En todos los campos de texto, cita explícitamente a los autores de los estudios
+    del corpus usando el formato (Apellido et al., Año) o (Apellido, Año). Cada hallazgo clave debe
+    referenciar el estudio específico del que proviene.
+
+    Genera un resultado en formato JSON estricto con las siguientes claves:
+    1. "synthesizer_log": Diálogo del Sintetizador (140-180 palabras). Confirma fichas PICO-S del
+       Paso 2, propone nivel GRADE preliminar con citas a 3-4 estudios del corpus, compara técnicas
+       citando autores específicos, y pasa la palabra al Opositor.
+    2. "bias_opponent_log": Diálogo del Opositor (130-170 palabras). Cuestiona la propuesta citando
+       limitaciones metodológicas de estudios concretos, indica gaps de conocimiento, y desafía el
+       grado si los tamaños muestrales o diseños lo justifican.
+    3. "meta_analysis": Objeto con las claves de la síntesis formal:
+       - "global_evidence_level": Nivel de evidencia global con referencia a los estudios del corpus.
+       - "grade_recommendation": Grado GRADE definitivo (A/B/C/D) con justificación citando autores.
+       - "comparison_findings": Comparación de técnicas con datos numéricos y citas (Autor et al., Año).
+       - "knowledge_gaps": Lista de brechas de conocimiento con el estudio que las identifica.
+       - "controversies": Lista de controversias citando los estudios en conflicto.
+       - "clinical_implications": Recomendaciones prácticas citando la evidencia de respaldo.
+
     Devuelve un JSON exacto con las claves raíz: "synthesizer_log", "bias_opponent_log", "meta_analysis".
     """
     
