@@ -23,7 +23,8 @@ async def call_gemini(
     system_instruction: Optional[str] = None,
     json_mode: bool = False,
     temperature: float = 0.2,
-    inline_data: Optional[dict] = None
+    inline_data: Optional[dict] = None,
+    thinking: bool = False
 ) -> str:
     """
     Función base asíncrona para realizar llamadas a la API de Google Gemini sin SDKs,
@@ -44,7 +45,6 @@ async def call_gemini(
     num_keys = len(keys_to_use)
 
     # Preparar el cuerpo de la petición (común para cualquier clave)
-
     contents = {
         "contents": [
             {
@@ -57,19 +57,23 @@ async def call_gemini(
             "temperature": temperature,
         }
     }
-    
+
+    # Deshabilitar thinking cuando no se necesita razonamiento profundo (más rápido en free tier)
+    if not thinking:
+        contents["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}
+
     if inline_data:
         contents["contents"][0]["parts"].append({
             "inlineData": inline_data
         })
-        
+
     if system_instruction:
         contents["systemInstruction"] = {
             "parts": [
                 {"text": system_instruction}
             ]
         }
-        
+
     if json_mode:
         contents["generationConfig"]["responseMimeType"] = "application/json"
 
