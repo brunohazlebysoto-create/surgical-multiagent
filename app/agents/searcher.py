@@ -614,11 +614,13 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
         ))
 
     # ── RERANKING con Gemini (opcional) ──────────────────────────────────
+    n = len(all_candidates)
+    target = 25 if n >= 25 else (20 if n >= 20 else n)
     if use_reranking:
-        final_papers = await rerank_papers(query, all_candidates, event_queue, target=15)
+        final_papers = await rerank_papers(query, all_candidates, event_queue, target=target)
     else:
-        final_papers = all_candidates[:15]
-        logger.info("Reranking desactivado por configuración. Usando orden por relevancia de APIs.")
+        final_papers = all_candidates[:target]
+        logger.info(f"Reranking desactivado por configuración. Usando top-{target} por relevancia de APIs.")
 
     # ── TURNO 3: REVISOR CRÍTICO ──────────────────────────────────────────
     logger.info("Paso 1 › Turno 3: Revisor Crítico")

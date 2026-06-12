@@ -124,6 +124,30 @@ async def _semantic_scholar_pdf_url(doi: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# OpenAlex  (open_access.oa_url — muy rápido, cubre PMC + repositorios)
+# ---------------------------------------------------------------------------
+
+async def _openalex_url(doi: str) -> Optional[str]:
+    """Consulta OpenAlex por DOI y devuelve open_access.oa_url si existe."""
+    if not doi or doi.startswith("pubmed_") or doi.startswith("user_upload_"):
+        return None
+    url = f"https://api.openalex.org/works/doi:{doi}?select=open_access"
+    try:
+        async with httpx.AsyncClient(timeout=_API_TIMEOUT) as client:
+            r = await client.get(url, headers={"User-Agent": "mailto:surgical-system@example.com"})
+            if r.status_code != 200:
+                return None
+            oa = r.json().get("open_access") or {}
+            oa_url = oa.get("oa_url")
+            if oa_url:
+                logger.info(f"OpenAlex OA URL para {doi}: {oa_url}")
+            return oa_url
+    except Exception as e:
+        logger.debug(f"OpenAlex falló para {doi}: {e}")
+    return None
+
+
+# ---------------------------------------------------------------------------
 # CORE API  (https://core.ac.uk/services/api)  – sin clave, resultados limitados
 # ---------------------------------------------------------------------------
 
@@ -208,7 +232,7 @@ async def fetch_free_fulltext(
 ) -> Tuple[Optional[str], Optional[str]]:
     """
     Intenta obtener el texto completo de un paper de forma gratuita y legal.
-    Prueba en orden: Unpaywall → Semantic Scholar → Europe PMC → CORE.
+    Fuentes (todas legales): Unpaywall · Semantic Scholar OA · Europe PMC · OpenAlex · CORE.
 
     Returns:
         (pdf_path, full_text) — ambos None si no se encontró ninguna fuente libre.
@@ -218,6 +242,7 @@ async def fetch_free_fulltext(
         _unpaywall_url(doi),
         _semantic_scholar_pdf_url(doi),
         _europepmc_url(doi),
+        _openalex_url(doi),
         return_exceptions=True
     )
 
