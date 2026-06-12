@@ -713,7 +713,10 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue) -> List[Dict[
     all_candidates = _rank_candidates(all_candidates, query)
 
     # ── RERANKING con Gemini ──────────────────────────────────────────────
-    final_papers = await rerank_papers(query, all_candidates, event_queue, target=15)
+    # Target dinámico: hasta 25 papers si hay suficientes candidatos de calidad
+    n = len(all_candidates)
+    target = 25 if n >= 25 else (20 if n >= 20 else n)
+    final_papers = await rerank_papers(query, all_candidates, event_queue, target=target)
 
     # ── TURNO 3: REVISOR CRÍTICO ──────────────────────────────────────────
     logger.info("Paso 1 › Turno 3: Revisor Crítico")
