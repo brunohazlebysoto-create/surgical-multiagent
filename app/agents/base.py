@@ -82,8 +82,8 @@ async def call_gemini(
 
     async with _api_semaphore:
         for attempt in range(max_attempts):
-            # Obtener el índice actual de la llave
-            key_idx = _current_key_idx
+            # Obtener el índice actual de la llave (siempre con módulo para evitar IndexError)
+            key_idx = _current_key_idx % num_keys
             api_key = keys_to_use[key_idx]
 
 
