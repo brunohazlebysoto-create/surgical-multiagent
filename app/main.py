@@ -65,8 +65,14 @@ async def auth_check(password: Optional[str] = Query(None)):
         return {"status": "authenticated"}
     return {"status": "unauthorized"}
 
+class PipelineConfig(BaseModel):
+    reranking: bool = True
+    pmc_download: bool = True
+    multimodal_pdf: bool = True
+
 class SearchRequest(BaseModel):
     query: str
+    pipeline_config: PipelineConfig = PipelineConfig()
 
 class ConfirmRequest(BaseModel):
     selected_dois: List[str]
@@ -75,17 +81,21 @@ class ConfirmFormatRequest(BaseModel):
     output_format: str = "both"   # "word", "pptx", "both"
     detail_level: str = "long"    # "short", "medium", "long", "very_detailed"
 
-async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, run_id: str, client_keys: List[str] = None):
+async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, run_id: str, client_keys: List[str] = None, pipeline_config: dict = None):
     """
     Orquesta el flujo del multi-agente.
     Pausa el flujo al finalizar el Paso 1 (Búsqueda) y espera confirmación del usuario.
     """
     from app.agents.base import gemini_keys_context
     token = gemini_keys_context.set(client_keys)
+    cfg = pipeline_config or {}
     try:
 
         # Paso 1: Panel de Búsqueda
-        papers = await run_search_panel(query, event_queue)
+        papers = await run_search_panel(
+            query, event_queue,
+            use_reranking=cfg.get("reranking", True)
+        )
         
         # Almacenar en la memoria de la ejecución
         global_runs[run_id]["papers_found"] = papers
@@ -115,22 +125,23 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
         if not selected_papers:
             selected_papers = all_available_papers[:15]
             
-        # Descargar figuras de PMC para los papers seleccionados
-        from app.services.document_parser import download_pmc_figures
-        await event_queue.put({
-            "agent": "Sistema", "role": "Extractor",
-            "color": "#a855f7", "icon": "📥", "stage": "analyze",
-            "content": "Buscando y descargando figuras/gráficos de PubMed Central para los papers seleccionados..."
-        })
-        for paper in selected_papers:
-            doi = paper.get("doi")
-            if doi and not doi.startswith("user_upload_"):
-                try:
-                    pmc_figs = await download_pmc_figures(doi, run_id)
-                    if pmc_figs:
-                        global_runs[run_id]["extracted_images"].extend(pmc_figs)
-                except Exception as e:
-                    logger.error(f"Error descargando figuras PMC para {doi}: {e}")
+        # Descargar figuras de PMC (si está habilitado en config)
+        if cfg.get("pmc_download", True):
+            from app.services.document_parser import download_pmc_figures
+            await event_queue.put({
+                "agent": "Sistema", "role": "Extractor",
+                "color": "#a855f7", "icon": "📥", "stage": "analyze",
+                "content": "Buscando y descargando figuras/gráficos de PubMed Central para los papers seleccionados..."
+            })
+            for paper in selected_papers:
+                doi = paper.get("doi")
+                if doi and not doi.startswith("user_upload_"):
+                    try:
+                        pmc_figs = await download_pmc_figures(doi, run_id)
+                        if pmc_figs:
+                            global_runs[run_id]["extracted_images"].extend(pmc_figs)
+                    except Exception as e:
+                        logger.error(f"Error descargando figuras PMC para {doi}: {e}")
             
         # Preguntar al usuario formato de salida y longitud antes de generar
         await event_queue.put({
@@ -279,9 +290,12 @@ async def start_pipeline(
     client_keys = []
     if x_gemini_api_keys:
         client_keys = [k.strip() for k in x_gemini_api_keys.split(",") if k.strip()]
-    
-    # Agregar la tarea en segundo plano pasándole las claves
-    background_tasks.add_task(execute_multiagent_pipeline, request.query, event_queue, run_id, client_keys)
+
+    # Serializar pipeline_config como dict plano
+    pipeline_config = request.pipeline_config.model_dump() if request.pipeline_config else {}
+
+    # Agregar la tarea en segundo plano pasándole las claves y config
+    background_tasks.add_task(execute_multiagent_pipeline, request.query, event_queue, run_id, client_keys, pipeline_config)
     
     return {"run_id": run_id}
 

@@ -72,6 +72,41 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Elementos del selector de formato
     const formatPanel = document.getElementById("format-panel");
+
+    // Mapa: fragmento del nombre del agente SSE → ID del badge de sub-agente
+    const AGENT_BADGE_MAP = {
+        "TERMINÓLOGO": "sa-terminologo",
+        "ESTRATEGA":   "sa-estratega",
+        "RERANKER":    "sa-reranker",
+        "REVISOR":     "sa-revisor",
+        "Extractor Clínico": "sa-extractor",
+        "Auditor de Evidencia": "sa-auditor-ev",
+        "Curador PICO-S": "sa-curador",
+        "Sintetizador": "sa-sintetizador",
+        "Bioestadístico": "sa-bioestadistico",
+        "Metodólogo": "sa-metodólogo",
+        "Redactor Médico": "sa-redactor",
+        "Auditor Farmacológico": "sa-auditor-qx",
+        "Editor en Jefe": "sa-editor",
+        "Diseñador de Diapositivas": "sa-disenador",
+        "Auditor Visual": "sa-auditor-vis",
+        "Programador PPTX": "sa-programador",
+        "Compilación": "sa-compilador",
+        "Renderizador": "sa-compilador"
+    };
+
+    function markSubAgent(agentName, done = false) {
+        for (const [key, badgeId] of Object.entries(AGENT_BADGE_MAP)) {
+            if (agentName && agentName.includes(key)) {
+                const el = document.getElementById(badgeId);
+                if (el) {
+                    el.classList.remove("active", "done");
+                    el.classList.add(done ? "done" : "active");
+                }
+                break;
+            }
+        }
+    }
     const confirmFormatBtn = document.getElementById("confirm-format-btn");
 
     // Botones de Descarga
@@ -295,6 +330,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 node.classList.add("pending");
             }
         });
+        // Reset all sub-agent badges
+        document.querySelectorAll(".sub-agent").forEach(el => {
+            el.classList.remove("active", "done");
+        });
     }
 
     function completeAllPipelineNodes() {
@@ -305,6 +344,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 node.classList.remove("pending", "active");
                 node.classList.add("completed");
             }
+        });
+        // Mark all sub-agent badges as done
+        document.querySelectorAll(".sub-agent").forEach(el => {
+            el.classList.remove("active");
+            el.classList.add("done");
         });
     }
 
@@ -672,10 +716,15 @@ document.addEventListener("DOMContentLoaded", () => {
             if (clientKeys) {
                 headers["X-Gemini-API-Keys"] = clientKeys;
             }
+            const pipeline_config = {
+                reranking:   document.getElementById("toggle-reranking")?.checked ?? true,
+                pmc_download: document.getElementById("toggle-pmc")?.checked ?? true,
+                multimodal_pdf: document.getElementById("toggle-multimodal")?.checked ?? true
+            };
             const response = await fetch("/api/start", {
                 method: "POST",
                 headers: headers,
-                body: JSON.stringify({ query: query })
+                body: JSON.stringify({ query: query, pipeline_config })
             });
 
 
@@ -714,9 +763,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 
                 // Agregar burbuja de chat
                 addChatBubble(data);
-                
+
+                // Actualizar badge de sub-agente en tiempo real
+                if (data.agent) markSubAgent(data.agent, false);
+
                 // Actualizar pipeline de nodos
-                if (data.stage && !["completed", "failed", "selection_required"].includes(data.stage)) {
+                if (data.stage && !["completed", "failed", "selection_required", "output_format_required"].includes(data.stage)) {
                     updatePipelineNodes(data.stage);
                     
                     // Actualizar círculo de cuota API

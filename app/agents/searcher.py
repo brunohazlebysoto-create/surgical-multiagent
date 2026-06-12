@@ -474,7 +474,7 @@ async def _run_apis(search_term: str) -> List[Dict[str, Any]]:
     return rich + poor if len(rich) < 10 else rich
 
 
-async def run_search_panel(query: str, event_queue: asyncio.Queue) -> List[Dict[str, Any]]:
+async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking: bool = True) -> List[Dict[str, Any]]:
     """
     Paso 1: Panel de Búsqueda.
     Búsqueda en vivo a través de PubMed (con abstracts reales via efetch XML),
@@ -609,8 +609,12 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue) -> List[Dict[
             "search"
         ))
 
-    # ── RERANKING con Gemini ──────────────────────────────────────────────
-    final_papers = await rerank_papers(query, all_candidates, event_queue, target=15)
+    # ── RERANKING con Gemini (opcional) ──────────────────────────────────
+    if use_reranking:
+        final_papers = await rerank_papers(query, all_candidates, event_queue, target=15)
+    else:
+        final_papers = all_candidates[:15]
+        logger.info("Reranking desactivado por configuración. Usando orden por relevancia de APIs.")
 
     # ── TURNO 3: REVISOR CRÍTICO ──────────────────────────────────────────
     logger.info("Paso 1 › Turno 3: Revisor Crítico")

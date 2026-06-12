@@ -102,33 +102,41 @@ async def run_analyzer_panel(papers: List[Dict[str, Any]], event_queue: asyncio.
         
         for idx, p in enumerate(papers):
             analysis = analyses_list.get(idx, {})
+            # Validar methodological_quality: debe ser int 1-5
+            raw_quality = analysis.get("methodological_quality", 3)
+            try:
+                quality = max(1, min(5, int(raw_quality)))
+            except (TypeError, ValueError):
+                quality = 3
             analyzed_papers.append({
-                "title": p["title"],
-                "authors": p["authors"],
-                "journal": p["journal"],
-                "year": p["year"],
-                "doi": p["doi"],
+                "title": p.get("title", "Sin título"),
+                "authors": p.get("authors", "Autores N/A"),
+                "journal": p.get("journal", "Revista N/A"),
+                "year": p.get("year", 2024),
+                "doi": p.get("doi", ""),
+                "abstract": p.get("abstract", ""),
                 "picos": {
-                    "P": analysis.get("population", "Población infantil"),
-                    "I": analysis.get("intervention", "Intervención quirúrgica"),
-                    "C": analysis.get("comparison", "Tratamiento alternativo"),
-                    "O": analysis.get("outcome", "Resultados clínicos postoperatorios"),
-                    "S": analysis.get("setting", "Hospital pediátrico")
+                    "P": analysis.get("population") or "Población infantil",
+                    "I": analysis.get("intervention") or "Intervención quirúrgica",
+                    "C": analysis.get("comparison") or "Tratamiento alternativo",
+                    "O": analysis.get("outcome") or "Resultados clínicos postoperatorios",
+                    "S": analysis.get("setting") or "Hospital pediátrico"
                 },
-                "oxford_level": analysis.get("oxford_level", "4"),
-                "methodological_quality": analysis.get("methodological_quality", 3),
-                "study_type": analysis.get("study_type", "Estudio Retrospectivo"),
-                "age_groups": analysis.get("age_groups", ["lactante"])
+                "oxford_level": analysis.get("oxford_level") or "4",
+                "methodological_quality": quality,
+                "study_type": analysis.get("study_type") or "Estudio Retrospectivo",
+                "age_groups": analysis.get("age_groups") or ["lactante"]
             })
     except Exception as e:
         logger.error(f"Error en extracción batched: {e}. Usando fallback seguro para cada paper.")
         for p in papers:
             analyzed_papers.append({
-                "title": p["title"],
-                "authors": p["authors"],
-                "journal": p["journal"],
-                "year": p["year"],
-                "doi": p["doi"],
+                "title": p.get("title", "Sin título"),
+                "authors": p.get("authors", "Autores N/A"),
+                "journal": p.get("journal", "Revista N/A"),
+                "year": p.get("year", 2024),
+                "doi": p.get("doi", ""),
+                "abstract": p.get("abstract", ""),
                 "picos": {
                     "P": "Población infantil",
                     "I": "Intervención quirúrgica",
