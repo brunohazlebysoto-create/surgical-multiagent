@@ -96,7 +96,7 @@ async def call_gemini(
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
             
             try:
-                async with httpx.AsyncClient(timeout=60.0) as client:
+                async with httpx.AsyncClient(timeout=30.0) as client:
                     response = await client.post(url, json=contents)
                     
                     # Si da error de tasa límite (429), rotar clave de inmediato

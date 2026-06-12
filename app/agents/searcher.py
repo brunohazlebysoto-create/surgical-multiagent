@@ -647,7 +647,11 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue) -> List[Dict[
     Responde en español con Markdown premium.
     """
 
-    agente2_msg = await call_gemini(prompt_agente2, temperature=0.2)
+    try:
+        agente2_msg = await call_gemini(prompt_agente2, temperature=0.2)
+    except Exception as e:
+        logger.error(f"Agente 2 falló: {e}. Usando fallback.")
+        agente2_msg = f"**AGENTE 2 — ESTRATEGA**: Búsqueda configurada para `{search_term}` en PubMed, Semantic Scholar, CrossRef y OpenAlex. Aplicando filtros pediátricos y de alta evidencia."
     await event_queue.put(critico.format_log(agente2_msg, "search"))
 
     # ── BÚSQUEDA EN APIS (con filtro pediátrico automático) ───────────────
@@ -756,7 +760,11 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue) -> List[Dict[
     Responde en español, riguroso y clínico, con Markdown.
     """
 
-    agente3_msg = await call_gemini(prompt_agente3, temperature=0.2)
+    try:
+        agente3_msg = await call_gemini(prompt_agente3, temperature=0.2)
+    except Exception as e:
+        logger.error(f"Agente 3 falló: {e}. Usando fallback.")
+        agente3_msg = f"**AGENTE 3 — REVISOR**: Se recuperaron **{len(final_papers)} artículos** para la consulta '{query}'. Pasan al análisis PICO-S en el Paso 2."
     await event_queue.put(refinador.format_log(agente3_msg, "search"))
 
     return final_papers
