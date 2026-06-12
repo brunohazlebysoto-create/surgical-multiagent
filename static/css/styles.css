@@ -1415,3 +1415,38 @@ input[type="text"]:focus {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.55; }
 }
+
+/* ── Full-text / free paper download ────────────────────────────────────── */
+.fulltext-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    background: rgba(16, 185, 129, 0.15);
+    border: 1px solid #10b981;
+    color: #10b981;
+    margin-top: 6px;
+}
+
+.free-paper-btn {
+    margin-top: 6px;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 8px;
+    background: transparent;
+    border: 1px solid var(--accent-secondary);
+    color: var(--accent-secondary);
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+}
+
+.free-paper-btn:hover:not(:disabled) {
+    background: rgba(56, 189, 248, 0.15);
+}
+
+.free-paper-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+}

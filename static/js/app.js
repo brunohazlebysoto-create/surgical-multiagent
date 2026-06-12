@@ -473,10 +473,58 @@ document.addEventListener("DOMContentLoaded", () => {
             details.appendChild(meta);
             details.appendChild(toggleBtn);
             details.appendChild(abstractDiv);
-            
+
+            // Indicador de texto completo disponible
+            if (paper.has_fulltext) {
+                const ftBadge = document.createElement("span");
+                ftBadge.className = "fulltext-badge";
+                ftBadge.innerHTML = `<i class="fa-solid fa-file-lines"></i> Texto completo`;
+                details.appendChild(ftBadge);
+            } else if (paper.doi && !paper.doi.startsWith("pubmed_") && !paper.doi.startsWith("user_upload_")) {
+                // Botón buscar versión libre
+                const freeBtn = document.createElement("button");
+                freeBtn.className = "btn btn-outline btn-xs free-paper-btn";
+                freeBtn.innerHTML = `<i class="fa-solid fa-magnifying-glass"></i> Buscar versión libre`;
+                freeBtn.dataset.doi = paper.doi;
+                freeBtn.dataset.title = paper.title;
+                freeBtn.addEventListener("click", async (e) => {
+                    e.stopPropagation();
+                    freeBtn.disabled = true;
+                    freeBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Buscando...`;
+                    try {
+                        const resp = await fetch(`/api/search-free/${currentRunId}`, {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/json",
+                                "X-Access-Password": localStorage.getItem("access_password") || ""
+                            },
+                            body: JSON.stringify({ doi: paper.doi, title: paper.title })
+                        });
+                        const result = await resp.json();
+                        if (result.status === "found") {
+                            freeBtn.className = "btn btn-xs fulltext-badge";
+                            freeBtn.innerHTML = `<i class="fa-solid fa-check"></i> Texto completo (${Math.round(result.chars/1000)}k chars)`;
+                            freeBtn.disabled = true;
+                            // Actualizar abstract visible
+                            if (result.text_preview) {
+                                abstractDiv.innerText = result.text_preview + "...";
+                            }
+                        } else {
+                            freeBtn.innerHTML = `<i class="fa-solid fa-lock"></i> Solo de pago`;
+                            freeBtn.disabled = true;
+                            freeBtn.style.opacity = "0.5";
+                        }
+                    } catch {
+                        freeBtn.innerHTML = `<i class="fa-solid fa-xmark"></i> Error`;
+                        freeBtn.disabled = false;
+                    }
+                });
+                details.appendChild(freeBtn);
+            }
+
             card.appendChild(checkbox);
             card.appendChild(details);
-            
+
             papersContainer.appendChild(card);
         });
         

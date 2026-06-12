@@ -664,4 +664,18 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
     agente3_msg = await call_gemini(prompt_agente3, temperature=0.2)
     await event_queue.put(refinador.format_log(agente3_msg, "search"))
 
+    # ── ENRIQUECIMIENTO CON TEXTO COMPLETO (fuentes OA gratuitas) ────────────
+    # Intentar descargar PDFs libres de Unpaywall, Semantic Scholar OA,
+    # Europe PMC y CORE para mejorar los abstracts antes del análisis PICO-S.
+    try:
+        from app.services.fulltext_fetcher import enrich_papers_with_fulltext
+        run_id_for_ft = getattr(event_queue, "_run_id", None)
+        final_papers = await enrich_papers_with_fulltext(
+            final_papers, event_queue,
+            run_id=run_id_for_ft or "tmp",
+            max_papers=10
+        )
+    except Exception as e:
+        logger.error(f"Error en enriquecimiento fulltext: {e}")
+
     return final_papers

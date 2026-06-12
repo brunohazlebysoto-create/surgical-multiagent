@@ -89,6 +89,8 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
     from app.agents.base import gemini_keys_context
     token = gemini_keys_context.set(client_keys)
     cfg = pipeline_config or {}
+    # Inyectar run_id en la queue para que fulltext_fetcher pueda guardar PDFs
+    event_queue._run_id = run_id
     try:
 
         # Paso 1: Panel de Búsqueda
@@ -394,6 +396,39 @@ async def upload_document(
         raise HTTPException(status_code=500, detail=f"Error parseando el archivo: {str(e)}")
     finally:
         gemini_keys_context.reset(token)
+
+
+class FreeSearchRequest(BaseModel):
+    doi: str
+    title: str = ""
+
+@app.post("/api/search-free/{run_id}")
+async def search_free_paper(run_id: str, request: FreeSearchRequest, _ = Depends(verify_access)):
+    """
+    Busca la versión gratuita y legal de un paper en Unpaywall, Semantic Scholar OA,
+    Europe PMC y CORE. Si se encuentra, descarga el PDF y lo añade como paper subido.
+    """
+    if run_id not in global_runs:
+        raise HTTPException(status_code=404, detail="Ejecución no encontrada")
+
+    from app.services.fulltext_fetcher import fetch_free_fulltext
+    save_dir = f"static/downloads/{run_id}/fulltext"
+
+    pdf_path, full_text = await fetch_free_fulltext(
+        doi=request.doi,
+        title=request.title,
+        save_dir=save_dir
+    )
+
+    if not pdf_path or not full_text:
+        return {"status": "not_found", "message": "No se encontró versión libre de acceso abierto para este paper."}
+
+    return {
+        "status": "found",
+        "pdf_path": pdf_path,
+        "text_preview": full_text[:400],
+        "chars": len(full_text)
+    }
 
 
 @app.get("/api/stream/{run_id}")
