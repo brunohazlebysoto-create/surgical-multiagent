@@ -70,6 +70,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const confirmBtn = document.getElementById("confirm-selection-btn");
     const selectionCounter = document.getElementById("selection-counter");
 
+    // Elementos del selector de formato
+    const formatPanel = document.getElementById("format-panel");
+    const confirmFormatBtn = document.getElementById("confirm-format-btn");
+
     // Botones de Descarga
     const downloadWordBtn = document.getElementById("download-word-btn");
     const downloadPptxBtn = document.getElementById("download-pptx-btn");
@@ -590,6 +594,39 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
+    // --- CONFIRMAR FORMATO DE SALIDA ---
+    confirmFormatBtn.addEventListener("click", async () => {
+        if (!currentRunId) return;
+
+        const outputFormat = document.querySelector('input[name="output_format"]:checked')?.value || "both";
+        const detailLevel = document.querySelector('input[name="detail_level"]:checked')?.value || "long";
+
+        confirmFormatBtn.disabled = true;
+        confirmFormatBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Iniciando análisis...`;
+
+        try {
+            const response = await fetch(`/api/confirm-format/${currentRunId}`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-Access-Password": localStorage.getItem("access_password") || ""
+                },
+                body: JSON.stringify({ output_format: outputFormat, detail_level: detailLevel })
+            });
+
+            if (!response.ok) throw new Error("Error al confirmar formato.");
+
+            formatPanel.classList.add("hidden");
+            startBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Analizando...`;
+
+        } catch (error) {
+            console.error(error);
+            alert("No se pudo configurar el formato. Inténtalo de nuevo.");
+            confirmFormatBtn.disabled = false;
+            confirmFormatBtn.innerHTML = `<i class="fa-solid fa-rocket"></i> Iniciar Análisis Completo`;
+        }
+    });
+
     // --- Iniciar Proceso (Llamada al Backend) ---
     startBtn.addEventListener("click", async () => {
         const query = queryInput.value.trim();
@@ -604,14 +641,17 @@ document.addEventListener("DOMContentLoaded", () => {
         downloadsPanel.classList.add("hidden");
         updateApiQuotaVisual(100, "Salud: 100%", "normal");
         selectionPanel.classList.add("hidden");
+        formatPanel.classList.add("hidden");
         uploadedList.innerHTML = "";
         availablePapers = [];
         selectedDois.clear();
-        
+
         // Reactivar dropzone
         uploadDropzone.style.pointerEvents = "auto";
         uploadDropzone.style.opacity = "1";
         confirmBtn.innerHTML = `<i class="fa-solid fa-circle-check"></i> Confirmar y Continuar Análisis`;
+        confirmFormatBtn.disabled = false;
+        confirmFormatBtn.innerHTML = `<i class="fa-solid fa-rocket"></i> Iniciar Análisis Completo`;
 
         startBtn.disabled = true;
         startBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Buscando papers...`;
@@ -698,24 +738,31 @@ document.addEventListener("DOMContentLoaded", () => {
                 // CASO ESPECIAL: Se requiere interactividad del usuario
                 if (data.stage === "selection_required") {
                     updatePipelineNodes("search");
-                    
+
                     // Modificar estado de botón principal
                     startBtn.innerHTML = `<i class="fa-solid fa-hourglass-half"></i> Esperando Selección...`;
-                    
+
                     // Cargar los papers candidatos devueltos
                     availablePapers = data.papers || [];
-                    
+
                     // Seleccionar todos por defecto inicialmente
                     selectedDois.clear();
                     availablePapers.forEach(p => selectedDois.add(p.doi));
-                    
+
                     renderPapersList();
-                    
+
                     // Mostrar panel de selección y hacer scroll suave hacia él
                     selectionPanel.classList.remove("hidden");
                     selectionPanel.scrollIntoView({ behavior: "smooth" });
                 }
-                
+
+                // CASO ESPECIAL: Selector de formato de salida
+                if (data.stage === "output_format_required") {
+                    startBtn.innerHTML = `<i class="fa-solid fa-hourglass-half"></i> Configurando salida...`;
+                    formatPanel.classList.remove("hidden");
+                    formatPanel.scrollIntoView({ behavior: "smooth" });
+                }
+
                 // Si completó con éxito
                 if (data.stage === "completed") {
                     eventSource.close();
@@ -765,15 +812,29 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // --- Configurar Enlaces de Descarga ---
     function setupDownloadLinks(runId) {
-        downloadWordBtn.onclick = () => {
-            window.location.href = `/api/downloads/${runId}/word`;
-        };
-        downloadPptxBtn.onclick = () => {
-            window.location.href = `/api/downloads/${runId}/powerpoint`;
-        };
-        downloadJsonBtn.onclick = () => {
-            window.location.href = `/api/downloads/${runId}/json`;
-        };
+        const outputFormat = document.querySelector('input[name="output_format"]:checked')?.value || "both";
+
+        if (downloadWordBtn) {
+            if (outputFormat === "pptx") {
+                downloadWordBtn.disabled = true;
+                downloadWordBtn.title = "No solicitado en esta ejecución";
+            } else {
+                downloadWordBtn.disabled = false;
+                downloadWordBtn.onclick = () => { window.location.href = `/api/downloads/${runId}/word`; };
+            }
+        }
+        if (downloadPptxBtn) {
+            if (outputFormat === "word") {
+                downloadPptxBtn.disabled = true;
+                downloadPptxBtn.title = "No solicitado en esta ejecución";
+            } else {
+                downloadPptxBtn.disabled = false;
+                downloadPptxBtn.onclick = () => { window.location.href = `/api/downloads/${runId}/powerpoint`; };
+            }
+        }
+        if (downloadJsonBtn) {
+            downloadJsonBtn.onclick = () => { window.location.href = `/api/downloads/${runId}/json`; };
+        }
     }
 
     // --- Renderizar Biblioteca de Evidencia ---

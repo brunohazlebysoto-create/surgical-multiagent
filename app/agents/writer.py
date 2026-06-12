@@ -72,18 +72,29 @@ NO los repitas ni los resumas. Empieza directamente en la Sección 7:
   • Sección 6: Complicaciones (intraoperatorias, tempranas y tardías con porcentajes)
 """
 
+_DETAIL_WORD_TARGETS = {
+    "short":         {"c1": 500,  "c2": 600,  "c3": 600,  "c4": 400},
+    "medium":        {"c1": 800,  "c2": 900,  "c3": 900,  "c4": 600},
+    "long":          {"c1": 1000, "c2": 1200, "c3": 1200, "c4": 800},
+    "very_detailed": {"c1": 1500, "c2": 1800, "c3": 1800, "c4": 1200},
+}
+
 async def generate_document_chunk(
     chunk_id: int,
     query: str,
     meta_analysis: Dict[str, Any],
     papers_summary: str,
-    inject_context: str = ""
+    inject_context: str = "",
+    detail_level: str = "long"
 ) -> str:
     """
     Genera una sección del apunte clínico usando Gemini.
     inject_context: texto adicional prepended al prompt (usado en chunk 4 para
     evitar que repita las secciones ya redactadas por chunks 1-3).
+    detail_level: controla la extensión mínima por chunk.
     """
+    wt = _DETAIL_WORD_TARGETS.get(detail_level, _DETAIL_WORD_TARGETS["long"])
+
     citation_rule = """
         REGLA DE CITACIÓN OBLIGATORIA: Toda afirmación clínica, estadística, técnica o diagnóstica
         DEBE ir acompañada de una cita explícita en el texto con el formato (Apellido et al., Año)
@@ -107,7 +118,7 @@ async def generate_document_chunk(
           (alteraciones metabólicas, obstrucción, cascada fisiopatológica).
 
         Instrucciones de formato:
-        - Escribe un mínimo de 1000 palabras para estas dos secciones combinadas.
+        - Escribe un mínimo de {wt['c1']} palabras para estas dos secciones combinadas.
         - Usa títulos en Markdown (# para secciones principales, ## para subsecciones).
         {citation_rule}
 
@@ -135,7 +146,7 @@ async def generate_document_chunk(
         - Diagnóstico Diferencial en TABLA Markdown.
 
         Instrucciones de formato:
-        - Escribe un mínimo de 1200 palabras para estas dos secciones combinadas.
+        - Escribe un mínimo de {wt['c2']} palabras para estas dos secciones combinadas.
         - Usa tablas Markdown estructuradas.
         {citation_rule}
 
@@ -168,7 +179,7 @@ async def generate_document_chunk(
 
         Instrucciones de formato:
         - Dosis farmacológicas SIEMPRE en mg/kg o mcg/kg.
-        - Escribe un mínimo de 1800 palabras para estas secciones.
+        - Escribe un mínimo de {wt['c3']} palabras para estas secciones.
         {citation_rule}
 
         Meta-análisis GRADE disponible:
@@ -197,7 +208,7 @@ async def generate_document_chunk(
         - Cada perla debe citar el paper que la respalda.
 
         Instrucciones de formato:
-        - Escribe un mínimo de 800 palabras para las secciones 7 y 8.
+        - Escribe un mínimo de {wt['c4']} palabras para las secciones 7 y 8.
         - NO incluyas una sección de Referencias — esa se genera automáticamente.
         {citation_rule}
 
@@ -220,7 +231,8 @@ async def run_writer_panel(
     meta_analysis: Dict[str, Any],
     analyzed_papers: List[Dict[str, Any]],
     query: str,
-    event_queue: asyncio.Queue
+    event_queue: asyncio.Queue,
+    detail_level: str = "long"
 ) -> Dict[str, str]:
     """
     Ejecuta el Panel de Redacción (Paso 4).
@@ -309,9 +321,9 @@ async def run_writer_panel(
     }
 
     parallel_results = await asyncio.gather(
-        generate_document_chunk(1, query, meta_analysis, papers_summary_str),
-        generate_document_chunk(2, query, meta_analysis, papers_summary_str),
-        generate_document_chunk(3, query, meta_analysis, papers_summary_str),
+        generate_document_chunk(1, query, meta_analysis, papers_summary_str, detail_level=detail_level),
+        generate_document_chunk(2, query, meta_analysis, papers_summary_str, detail_level=detail_level),
+        generate_document_chunk(3, query, meta_analysis, papers_summary_str, detail_level=detail_level),
         return_exceptions=True
     )
 
@@ -333,7 +345,8 @@ async def run_writer_panel(
     try:
         raw_chunk4 = await generate_document_chunk(
             4, query, meta_analysis, papers_summary_str,
-            inject_context=_CHUNK_SECTIONS_COVERED
+            inject_context=_CHUNK_SECTIONS_COVERED,
+            detail_level=detail_level
         )
     except Exception as e:
         logger.error(f"Error generando chunk 4: {e}")

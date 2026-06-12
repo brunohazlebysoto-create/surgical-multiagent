@@ -1174,3 +1174,90 @@ input[type="text"]:focus {
 
 
 
+
+/* ── Format Selector Panel ────────────────────────────────────────────────── */
+.format-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.format-section h3 {
+    font-family: var(--font-heading);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.format-options {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.format-option-card {
+    cursor: pointer;
+    flex: 1;
+    min-width: 160px;
+}
+
+.format-option-card input[type="radio"] {
+    display: none;
+}
+
+.format-card-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 16px 12px;
+    border: 2px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-secondary);
+    transition: border-color 0.2s, background 0.2s, transform 0.15s;
+    text-align: center;
+}
+
+.format-option-card input[type="radio"]:checked + .format-card-inner {
+    border-color: var(--accent-primary);
+    background: rgba(56, 189, 248, 0.08);
+    transform: translateY(-2px);
+}
+
+.format-card-inner > i {
+    font-size: 22px;
+    color: var(--accent-primary);
+}
+
+.format-label {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 13.5px;
+    color: var(--text-primary);
+}
+
+.format-desc {
+    font-size: 11.5px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.detail-badge {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 13px;
+    font-family: var(--font-heading);
+}
+
+.detail-badge.short  { background: #1e3a5f; color: #60a5fa; }
+.detail-badge.medium { background: #1e4d3f; color: #34d399; }
+.detail-badge.long   { background: #3b1f63; color: #a78bfa; }
+.detail-badge.xl     { background: #5c1c1c; color: #f87171; }

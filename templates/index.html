@@ -169,6 +169,90 @@
                 </div>
             </section>
 
+            <!-- FORMAT SELECTOR PANEL -->
+            <section class="selection-panel card hidden" id="format-panel">
+                <h2><i class="fa-solid fa-sliders icon-accent"></i> Configuración de Salida</h2>
+                <p class="panel-desc">Elige qué archivos deseas generar y la extensión del documento. A mayor longitud, mayor detalle clínico.</p>
+
+                <div class="format-grid">
+                    <!-- Formato de archivo -->
+                    <div class="format-section">
+                        <h3><i class="fa-solid fa-file-export icon-accent"></i> Formato de salida</h3>
+                        <div class="format-options">
+                            <label class="format-option-card">
+                                <input type="radio" name="output_format" value="both" checked>
+                                <div class="format-card-inner">
+                                    <i class="fa-solid fa-layer-group"></i>
+                                    <span class="format-label">Word + PowerPoint</span>
+                                    <span class="format-desc">Apunte clínico detallado y presentación de diapositivas</span>
+                                </div>
+                            </label>
+                            <label class="format-option-card">
+                                <input type="radio" name="output_format" value="word">
+                                <div class="format-card-inner">
+                                    <i class="fa-solid fa-file-word"></i>
+                                    <span class="format-label">Solo Word (.docx)</span>
+                                    <span class="format-desc">Apunte clínico completo con referencias Vancouver</span>
+                                </div>
+                            </label>
+                            <label class="format-option-card">
+                                <input type="radio" name="output_format" value="pptx">
+                                <div class="format-card-inner">
+                                    <i class="fa-solid fa-file-powerpoint"></i>
+                                    <span class="format-label">Solo PowerPoint (.pptx)</span>
+                                    <span class="format-desc">Presentación de diapositivas profesional</span>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Longitud del documento -->
+                    <div class="format-section">
+                        <h3><i class="fa-solid fa-ruler icon-accent"></i> Longitud del documento</h3>
+                        <div class="format-options detail-options">
+                            <label class="format-option-card">
+                                <input type="radio" name="detail_level" value="short">
+                                <div class="format-card-inner">
+                                    <span class="detail-badge short">S</span>
+                                    <span class="format-label">Corto</span>
+                                    <span class="format-desc">~2 000 palabras · 15-20 slides</span>
+                                </div>
+                            </label>
+                            <label class="format-option-card">
+                                <input type="radio" name="detail_level" value="medium">
+                                <div class="format-card-inner">
+                                    <span class="detail-badge medium">M</span>
+                                    <span class="format-label">Medio</span>
+                                    <span class="format-desc">~4 000 palabras · 25-35 slides</span>
+                                </div>
+                            </label>
+                            <label class="format-option-card">
+                                <input type="radio" name="detail_level" value="long" checked>
+                                <div class="format-card-inner">
+                                    <span class="detail-badge long">L</span>
+                                    <span class="format-label">Largo</span>
+                                    <span class="format-desc">~6 000 palabras · 40-60 slides</span>
+                                </div>
+                            </label>
+                            <label class="format-option-card">
+                                <input type="radio" name="detail_level" value="very_detailed">
+                                <div class="format-card-inner">
+                                    <span class="detail-badge xl">XL</span>
+                                    <span class="format-label">Muy detallado</span>
+                                    <span class="format-desc">~8 000+ palabras · 60-80 slides</span>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="selection-actions">
+                    <button id="confirm-format-btn" class="btn btn-primary">
+                        <i class="fa-solid fa-rocket"></i> Iniciar Análisis Completo
+                    </button>
+                </div>
+            </section>
+
             <!-- WORKSPACE SPLIT -->
             <div class="workspace-grid">
                 <!-- WORKFLOW STAGES (LEFT) -->

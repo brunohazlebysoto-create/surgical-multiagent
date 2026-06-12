@@ -33,11 +33,19 @@ class PptxProgrammerAgent(BaseAgent):
             icon="💻"
         )
 
+_SLIDE_TARGETS = {
+    "short": "entre 15 y 20",
+    "medium": "entre 25 y 35",
+    "long": "entre 40 y 60",
+    "very_detailed": "entre 60 y 80",
+}
+
 async def run_presenter_panel(
     meta_analysis: Dict[str, Any],
     analyzed_papers: List[Dict[str, Any]],
     query: str,
-    event_queue: asyncio.Queue
+    event_queue: asyncio.Queue,
+    detail_level: str = "long"
 ) -> List[Dict[str, Any]]:
     """
     Ejecuta el Panel de Presentación (Paso 5).
@@ -114,7 +122,7 @@ async def run_presenter_panel(
     
     Instrucciones críticas:
     - Basa el orden clínico, las comparaciones y las descripciones directamente en los papers provistos, citándolos explícitamente en el texto de las viñetas (ej. 'Evidencia: Oomen et al.').
-    - NO te limites a una cantidad baja. Genera tantas diapositivas como consideres necesarias para explicar toda la patología en profundidad (se recomiendan entre 40 y 60 diapositivas). Explica a fondo cada concepto clínico, especialmente las técnicas quirúrgicas actuales, las técnicas tradicionales y la evolución histórica.
+    - Genera {_SLIDE_TARGETS.get(detail_level, "entre 40 y 60")} diapositivas. Explica a fondo cada concepto clínico, especialmente las técnicas quirúrgicas actuales, las técnicas tradicionales y la evolución histórica.
     - La Diapositiva de Tabla de Evidencia debe completarse utilizando los datos estructurados en: {papers_json_str}.
     
     Asegúrate de incluir y expandir detalladamente las siguientes secciones, dedicando múltiples diapositivas a las secciones complejas:
