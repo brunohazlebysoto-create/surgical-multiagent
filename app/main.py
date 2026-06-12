@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from typing import List, Optional
 from fastapi import FastAPI, BackgroundTasks, HTTPException, UploadFile, File, Form, Depends, Header, Query
@@ -38,13 +39,36 @@ app.add_middleware(
 )
 
 # Estructura para almacenar las ejecuciones activas
-# run_id -> {"event_queue": Queue, "docx_path": str, "pptx_path": str, "json_path": str, "step2_trigger": asyncio.Event, "papers_found": list, "uploaded_papers": list, "selected_dois": list}
+# run_id -> {"event_queue": Queue, "docx_path": str, "pptx_path": str, "json_path": str, "step2_trigger": asyncio.Event, "papers_found": list, "uploaded_papers": list, "selected_dois": list, "created_at": float}
 global_runs = {}
+
+# TTL para limpiar ejecuciones inactivas (4 horas)
+RUN_TTL_SECONDS = 3600 * 4
 
 # Asegurar directorios estáticos de salida
 os.makedirs("static/downloads", exist_ok=True)
 os.makedirs("static/uploads", exist_ok=True)
 os.makedirs("templates", exist_ok=True)
+
+
+async def _periodic_cleanup():
+    """Elimina ejecuciones de global_runs que superen el TTL para evitar fuga de memoria."""
+    while True:
+        await asyncio.sleep(3600)  # Revisar cada hora
+        now = time.time()
+        expired = [
+            rid for rid, data in list(global_runs.items())
+            if now - data.get("created_at", now) > RUN_TTL_SECONDS
+        ]
+        for rid in expired:
+            global_runs.pop(rid, None)
+            logger.info(f"Ejecución expirada eliminada de memoria: {rid}")
+
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(_periodic_cleanup())
+
 
 async def verify_access(
     x_access_password: Optional[str] = Header(None),
@@ -243,7 +267,8 @@ async def start_pipeline(
         "papers_found": [],
         "uploaded_papers": [],
         "selected_dois": [],
-        "extracted_images": []
+        "extracted_images": [],
+        "created_at": time.time(),
     }
     
     # Parsear claves de API enviadas por el cliente
@@ -362,6 +387,9 @@ async def get_download_file(run_id: str, file_type: str):
     Endpoint para descargar los entregables generados.
     Soporta búsquedas físicas si la memoria del servidor fue limpiada por reinicio/reload.
     """
+    if file_type not in ("word", "powerpoint", "json"):
+        raise HTTPException(status_code=400, detail="Tipo de archivo inválido. Use: word, powerpoint o json")
+
     filepath = None
     
     # 1. Intentar buscar en la memoria activa de la ejecución
@@ -381,10 +409,8 @@ async def get_download_file(run_id: str, file_type: str):
             temp_path = f"{run_dir}/apunte_clinico.docx"
         elif file_type == "powerpoint":
             temp_path = f"{run_dir}/presentacion_profesional.pptx"
-        elif file_type == "json":
-            temp_path = f"{run_dir}/meta_analisis.json"
         else:
-            raise HTTPException(status_code=400, detail="Tipo de archivo inválido")
+            temp_path = f"{run_dir}/meta_analisis.json"
             
         if os.path.exists(temp_path):
             filepath = temp_path
