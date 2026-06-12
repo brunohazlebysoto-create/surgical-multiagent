@@ -96,7 +96,7 @@ async def run_analyzer_panel(papers: List[Dict[str, Any]], event_queue: asyncio.
     
     analyzed_papers = []
     try:
-        response_text = await call_gemini(prompt_batch, json_mode=True, temperature=0.1)
+        response_text = await call_gemini(prompt_batch, json_mode=True, temperature=0.1, thinking_budget=4096)
         batch_data = json.loads(response_text)
         analyses_list = {a["id"]: a for a in batch_data.get("analyses", [])}
         
@@ -170,7 +170,7 @@ async def run_analyzer_panel(papers: List[Dict[str, Any]], event_queue: asyncio.
     Devuelve un JSON exacto con las claves: "extractor_log", "auditor_log", "curador_log".
     """
     try:
-        response_debate = await call_gemini(prompt_debate, json_mode=True, temperature=0.3)
+        response_debate = await call_gemini(prompt_debate, json_mode=True, temperature=0.3, thinking_budget=4096)
         debate_data = json.loads(response_debate)
         ext_msg = debate_data.get("extractor_log", "Análisis PICO-S completado.")
         aud_msg = debate_data.get("auditor_log", "Calidad metodológica auditada con éxito.")

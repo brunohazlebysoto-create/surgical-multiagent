@@ -96,7 +96,7 @@ async def run_meta_analyst_panel(
     """
     
     try:
-        response_text = await call_gemini(prompt_consolidated, json_mode=True, temperature=0.2)
+        response_text = await call_gemini(prompt_consolidated, json_mode=True, temperature=0.2, thinking_budget=8192)
         data = json.loads(response_text)
         
         synth_msg = data.get("synthesizer_log", "Síntesis preliminar iniciada.")

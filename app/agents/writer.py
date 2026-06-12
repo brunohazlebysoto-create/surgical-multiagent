@@ -167,7 +167,7 @@ async def generate_document_chunk(
         """
     }
 
-    return await call_gemini(prompts[chunk_id], temperature=0.25)
+    return await call_gemini(prompts[chunk_id], temperature=0.25, thinking_budget=8192)
 
 async def run_writer_panel(
     meta_analysis: Dict[str, Any],

@@ -509,7 +509,7 @@ async def rerank_papers(
     {{"selected_indices": [lista ordenada de hasta {target} índices de la lista original]}}
     """
     try:
-        raw = await call_gemini(prompt, json_mode=True, temperature=0.1)
+        raw = await call_gemini(prompt, json_mode=True, temperature=0.1, thinking_budget=0)
         cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         selected_indices = json.loads(cleaned).get("selected_indices", [])
 
