@@ -263,8 +263,11 @@ def add_prisma_table(doc, query, prisma_data=None):
     
     add_styled_table(doc, headers, rows)
 
-def add_grade_table(doc, grade_data=None):
-    """Inserta una tabla de perfil de evidencia GRADEpro."""
+def add_grade_table(doc, meta_analysis: dict = None):
+    """
+    Inserta una tabla de perfil de evidencia GRADE usando los datos reales
+    del meta-análisis cuando están disponibles, y un fallback genérico si no.
+    """
     p = doc.add_paragraph()
     p.paragraph_format.space_before = Pt(18)
     p.paragraph_format.space_after = Pt(6)
@@ -274,14 +277,38 @@ def add_grade_table(doc, grade_data=None):
     run.font.bold = True
     run.font.color.rgb = NAVY_COLOR
     p.paragraph_format.keep_with_next = True
-    
-    headers = ["Estudios / Diseño", "Riesgo de Sesgo", "Inconsistencia", "Evidencia Indirecta", "Imprecisión", "Certeza", "Recomendación"]
-    
-    rows = grade_data or [
-        ["15 Ensayos Clínicos y Cohortes", "No serio (Cegamiento adecuado en ECAs)", "No serio (Resultados homogéneos en éxito clínico)", "No serio (Población pediátrica estricta)", "Serio (Muestras pequeñas en algunas cohortes)", "MODERADA (★★3/4)", "Fuerte a Favor de técnica estándar"],
-        ["Estudios Observacionales", "Moderado en estudios retrospectivos", "No serio", "No serio", "No serio", "BAJA (★★2/4)", "Recomendación débil para técnicas alternativas"]
-    ]
-    
+
+    headers = ["Resultado clínico / Diseño", "Certeza de la evidencia",
+               "Hallazgos comparativos", "Brechas / Limitaciones", "Recomendación GRADE"]
+
+    if meta_analysis:
+        evidence_level = str(meta_analysis.get("global_evidence_level", "Nivel 2b"))[:120]
+        grade_rec      = str(meta_analysis.get("grade_recommendation", "Grado B"))[:120]
+        comparison     = str(meta_analysis.get("comparison_findings", "Ver síntesis"))[:150]
+        gaps_raw       = meta_analysis.get("knowledge_gaps", [])
+        gaps           = ("; ".join(gaps_raw) if isinstance(gaps_raw, list) else str(gaps_raw))[:150]
+        controversies  = meta_analysis.get("controversies", [])
+        controv_str    = ("; ".join(controversies) if isinstance(controversies, list) else str(controversies))[:150]
+        implications   = str(meta_analysis.get("clinical_implications", ""))[:150]
+
+        rows = [
+            ["Eficacia de intervención quirúrgica pediátrica",
+             evidence_level, comparison, gaps, grade_rec],
+            ["Seguridad y complicaciones (intra y postoperatorias)",
+             evidence_level, controv_str, gaps, grade_rec],
+            ["Implicaciones clínicas prácticas",
+             evidence_level, implications, "Ver controversias actuales", grade_rec],
+        ]
+    else:
+        rows = [
+            ["15 ECAs y Cohortes", "MODERADA (★★★☆)",
+             "Resultados homogéneos en éxito clínico", "Muestras pequeñas en algunas cohortes",
+             "Fuerte a Favor de técnica estándar"],
+            ["Estudios Observacionales", "BAJA (★★☆☆)",
+             "Heterogeneidad en tiempos operatorios", "Sesgo de selección en retrospectivos",
+             "Recomendación débil para técnicas alternativas"],
+        ]
+
     add_styled_table(doc, headers, rows)
 
 def insert_extracted_images(doc, images: list, section_type: str):
@@ -338,12 +365,12 @@ def insert_extracted_images(doc, images: list, section_type: str):
                     logger.error(f"Error insertando imagen extraída en Word: {e}")
 
 def build_docx(
-    sections: Dict[str, str], 
-    filepath: str, 
-    query: str, 
+    sections: Dict[str, str],
+    filepath: str,
+    query: str,
     extracted_images: list = None,
     prisma_data: dict = None,
-    grade_data: list = None
+    meta_analysis: dict = None,
 ):
     """
     Compila todas las secciones generadas en un único archivo .docx estilizado.
@@ -420,7 +447,7 @@ def build_docx(
                 insert_extracted_images(doc, extracted_images, "treat")
             elif section_key == "evidence_references":
                 insert_extracted_images(doc, extracted_images, "synthesis")
-                add_grade_table(doc, grade_data)
+                add_grade_table(doc, meta_analysis)
                 
             # Agregar salto de página entre bloques principales para orden
             if section_key != order[-1]:

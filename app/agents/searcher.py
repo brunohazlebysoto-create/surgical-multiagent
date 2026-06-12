@@ -465,7 +465,13 @@ async def _run_apis(search_term: str) -> List[Dict[str, Any]]:
 
     # Filtrar ciencia básica y deduplicar
     clinical = [p for p in all_papers if _is_clinical_paper(p.get("title", ""), p.get("abstract", ""))]
-    return _deduplicate(clinical)
+    deduped = _deduplicate(clinical)
+
+    # Preferir papers con abstract útil (≥80 chars). Solo incluir los sin abstract
+    # si el pool de calidad no llega a 10 candidatos.
+    rich = [p for p in deduped if len((p.get("abstract") or "")) >= 80]
+    poor = [p for p in deduped if len((p.get("abstract") or "")) < 80]
+    return rich + poor if len(rich) < 10 else rich
 
 
 async def run_search_panel(query: str, event_queue: asyncio.Queue) -> List[Dict[str, Any]]:

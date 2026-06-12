@@ -166,9 +166,10 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
             "excluded": (len(global_runs[run_id]["papers_found"]) + len(global_runs[run_id]["uploaded_papers"])) - len(selected_papers),
             "included": len(selected_papers)
         }
-        build_docx(sections, docx_filepath, query, 
+        build_docx(sections, docx_filepath, query,
                    extracted_images=global_runs[run_id]["extracted_images"],
-                   prisma_data=prisma_data)
+                   prisma_data=prisma_data,
+                   meta_analysis=meta_analysis)
         
         # Generar PowerPoint
         await event_queue.put({

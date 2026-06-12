@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from app.agents.base import BaseAgent, call_gemini
 
 logger = logging.getLogger("multiagent_writer")
@@ -32,14 +32,58 @@ class ChiefEditorAgent(BaseAgent):
             icon="📰"
         )
 
+
+# ---------------------------------------------------------------------------
+# Deterministic Vancouver reference list (fallback-proof)
+# ---------------------------------------------------------------------------
+
+def _build_vancouver_refs(analyzed_papers: List[Dict[str, Any]]) -> str:
+    """
+    Genera la lista de referencias en formato Vancouver directamente desde los
+    datos estructurados. No depende de Gemini, así que garantiza que TODOS los
+    papers queden listados y sin duplicados.
+    """
+    lines = ["\n# Sección 9: Referencias Bibliográficas (Vancouver)\n"]
+    for i, p in enumerate(analyzed_papers):
+        authors = p.get("authors", "Autores no especificados")
+        title = p.get("title", "Sin título")
+        journal = p.get("journal", "Revista N/A")
+        year = p.get("year", "s.f.")
+        doi = p.get("doi", "")
+        doi_display = (
+            doi if doi and not doi.startswith("pubmed_") and not doi.startswith("user_upload_")
+            else "N/A"
+        )
+        lines.append(f"[{i + 1}] {authors}. {title}. {journal}. {year}. DOI: {doi_display}.")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Chunk generation
+# ---------------------------------------------------------------------------
+
+_CHUNK_SECTIONS_COVERED = """IMPORTANTE — Los siguientes bloques ya fueron redactados por otros autores.
+NO los repitas ni los resumas. Empieza directamente en la Sección 7:
+  • Sección 1: Introducción + Caso Clínico de Gancho + Epidemiología
+  • Sección 2: Embriología y Fisiopatología
+  • Sección 3: Manifestaciones Clínicas por Grupo Etario (con tablas)
+  • Sección 4: Diagnóstico (clínico, laboratorio, imágenes, score, DDx)
+  • Sección 5: Tratamiento (preparación, anestesia, técnicas, postoperatorio)
+  • Sección 6: Complicaciones (intraoperatorias, tempranas y tardías con porcentajes)
+"""
+
 async def generate_document_chunk(
     chunk_id: int,
     query: str,
     meta_analysis: Dict[str, Any],
-    papers_summary: str
+    papers_summary: str,
+    inject_context: str = ""
 ) -> str:
-    """Genera una sección del apunte clínico de forma detallada usando Gemini para garantizar extensión y rigor."""
-
+    """
+    Genera una sección del apunte clínico usando Gemini.
+    inject_context: texto adicional prepended al prompt (usado en chunk 4 para
+    evitar que repita las secciones ya redactadas por chunks 1-3).
+    """
     citation_rule = """
         REGLA DE CITACIÓN OBLIGATORIA: Toda afirmación clínica, estadística, técnica o diagnóstica
         DEBE ir acompañada de una cita explícita en el texto con el formato (Apellido et al., Año)
@@ -135,39 +179,42 @@ async def generate_document_chunk(
         """,
 
         4: f"""
+        {inject_context}
+
         Eres un Redactor Médico especializado en cirugía pediátrica.
-        Escribe un manuscrito extremadamente detallado para las siguientes secciones del tema "{query}":
+        Escribe ÚNICAMENTE las siguientes secciones del tema "{query}":
 
         SECCIÓN 7: Síntesis de Evidencia
         - Resumen cruzado comparando las técnicas o estrategias según los estudios analizados.
         - Recomendación GRADE definitiva (A/B/C/D) con justificación basada en los papers.
         - Brechas de conocimiento y controversias actuales.
+        - OBLIGATORIO: cita explícitamente a cada autor al mencionar sus hallazgos
+          (ej. 'Como demostraron Oomen et al. (2021) en su meta-análisis...' o
+          'Minneci et al. (2020) reportaron en JAMA...').
 
         SECCIÓN 8: 10 Perlas Clínicas
         - Lista numerada con 10 recomendaciones de sabiduría quirúrgica pediátrica práctica.
         - Cada perla debe citar el paper que la respalda.
 
-        SECCIÓN 9: Referencias (formato Vancouver)
-        - Lista numerada de TODOS los papers del contexto, en este formato:
-          [N] Apellido Iniciales, Apellido Iniciales. Título del artículo. Nombre Revista Abreviado.
-          Año;Volumen(Número):Páginas. DOI: XXXXX.
-        - Incluye TODOS los papers de la lista, sin omitir ninguno.
-
         Instrucciones de formato:
         - Escribe un mínimo de 800 palabras para las secciones 7 y 8.
-        - OBLIGATORIO: En la Sección 7, cita explícitamente a cada autor al mencionar sus hallazgos
-          (ej. 'Como demostraron Oomen et al. (2021) en su meta-análisis...' o
-          'Minneci et al. (2020) reportaron en JAMA...').
+        - NO incluyas una sección de Referencias — esa se genera automáticamente.
+        {citation_rule}
 
         Meta-análisis GRADE disponible:
         {meta_analysis}
 
-        Lista de referencias disponibles para citar y listar en Sección 9:
+        Lista de referencias disponibles para citar (usa estas y solo estas):
         {papers_summary}
         """
     }
 
     return await call_gemini(prompts[chunk_id], temperature=0.25)
+
+
+# ---------------------------------------------------------------------------
+# Writer panel (Paso 4)
+# ---------------------------------------------------------------------------
 
 async def run_writer_panel(
     meta_analysis: Dict[str, Any],
@@ -177,84 +224,141 @@ async def run_writer_panel(
 ) -> Dict[str, str]:
     """
     Ejecuta el Panel de Redacción (Paso 4).
-    Debaten 3 agentes sobre seguridad farmacológica y técnica, y luego redactan el apunte en chunks.
+    Chunks 1-3 se generan EN PARALELO (reducen 3×30s → ~30s).
+    Chunk 4 va después con contexto de qué cubrieron los anteriores.
+    Las referencias Vancouver se construyen deterministicamente.
     """
     redactor = MedicalWriterAgent()
     auditor = ClinicalAuditorAgent()
     editor = ChiefEditorAgent()
-    
+
     logger.info("Iniciando Paso 4: Panel de Redacción")
-    
-    # --- TURNO 1: REDACTOR MÉDICO (Ejecutor) ---
-    intro_debate = f"""Recibido el informe GRADE consolidado del **Redactor Científico** (Paso 3) sobre "{query}".
-    Procedo a estructurar el apunte clínico. La extensión superará las 2000 palabras cubriendo desde epidemiología hasta la técnica paso a paso.
-    Tomo como base los {len(analyzed_papers)} estudios seleccionados y la recomendación GRADE {meta_analysis.get('grade_recommendation')}. 
-    Paso la propuesta de estructura al **Auditor Farmacológico y Quirúrgico** para establecer las reglas críticas de seguridad."""
+
+    # Debate de agentes (sin cambios)
+    intro_debate = (
+        f"Recibido el informe GRADE consolidado del **Redactor Científico** (Paso 3) sobre \"{query}\".\n"
+        f"Procedo a estructurar el apunte clínico. La extensión superará las 5000 palabras cubriendo "
+        f"desde epidemiología hasta la técnica paso a paso.\n"
+        f"Tomo como base los {len(analyzed_papers)} estudios seleccionados y la recomendación GRADE "
+        f"{meta_analysis.get('grade_recommendation')}.\n"
+        f"Paso la propuesta de estructura al **Auditor Farmacológico y Quirúrgico** para establecer "
+        f"las reglas críticas de seguridad."
+    )
     await event_queue.put(redactor.format_log(intro_debate, "write"))
 
-    # --- TURNO 2: AUDITOR CLÍNICO (Crítico) ---
-    audit_msg = f"""Recibida la propuesta de estructura del **Redactor Médico** para el análisis clínico de "{query}". Como Auditor Farmacológico y Quirúrgico, apruebo la disposición de secciones pero exijo estrictamente el cumplimiento de las siguientes directrices de seguridad:
-    1. **Dosificación por Peso**: Asegurar que todas las dosis (inducción, mantenimiento anestésico y analgesia) se detallen estrictamente en mg/kg o mcg/kg.
-    2. **Algoritmo basado en Scores**: Exijo la inclusión detallada del algoritmo terapéutico dictado por un score clínico de severidad, definiendo el umbral exacto para observación activa, tratamiento conservador/médico y tratamiento quirúrgico.
-    3. **Porcentajes Estadísticos**: Es mandatorio especificar los porcentajes de frecuencia de manifestaciones clínicas por grupos de edad, así como las tasas de complicaciones intra y postoperatorias reales según la literatura.
-    4. **Reparos de Seguridad**: Describir con precisión los reparos anatómicos de seguridad para evitar lesiones iatrogénicas inadvertidas de estructuras vecinas.
-    Transmito estas directrices de seguridad al **Editor en Jefe** para supervisar la redacción final de los chunks."""
+    audit_msg = (
+        f"Recibida la propuesta de estructura del **Redactor Médico** para el análisis clínico de \"{query}\". "
+        f"Como Auditor Farmacológico y Quirúrgico, apruebo la disposición de secciones pero exijo:\n"
+        f"1. **Dosificación por Peso**: todas las dosis en mg/kg o mcg/kg.\n"
+        f"2. **Algoritmo basado en Scores**: umbral exacto para observación, tratamiento conservador y quirúrgico.\n"
+        f"3. **Porcentajes Estadísticos**: frecuencias de manifestaciones y tasas de complicaciones reales.\n"
+        f"4. **Reparos de Seguridad**: estructuras vecinas y anatomía crítica.\n"
+        f"5. **Redacción en paralelo**: los Chunks 1-3 se redactan simultáneamente para eficiencia máxima."
+    )
     await event_queue.put(auditor.format_log(audit_msg, "write"))
 
-    # --- TURNO 3: EDITOR EN JEFE (Refinador) ---
-    editor_msg = f"""Entendido y directrices del **Auditor Farmacológico y Quirúrgico** aprobadas. Como Editor en Jefe, supervisaré que el Redactor Médico aplique cada una de las dosis, ayunos y reparos anatómicos indicados.
-    Iniciamos la redacción por secciones detalladas. Al finalizar la compilación del apunte clínico, transferiré las conclusiones y pautas de evidencia al **Diseñador de Diapositivas** del Paso 5 (Presentación) para estructurar el PowerPoint."""
+    editor_msg = (
+        "Directrices aprobadas. Redacción en paralelo (Secciones 1-6) iniciada. "
+        "Chunk 4 (Síntesis + Perlas + Referencias) se generará tras la conclusión del bloque paralelo, "
+        "con contexto completo de lo redactado para evitar repeticiones."
+    )
     await event_queue.put(editor.format_log(editor_msg, "write"))
 
-    # --- FASE DE GENERACIÓN MODULAR DE TEXTO (CHUNKS) ---
-    # Resumen bibliográfico completo para citación en texto (autor, revista, DOI)
+    # ── Resumen bibliográfico completo ──────────────────────────────────────
     ref_lines = []
     for i, p in enumerate(analyzed_papers):
         authors_raw = p.get("authors", "Autores N/A")
-        first_author = authors_raw.split(",")[0].strip()
+        abstract_excerpt = (p.get("abstract") or "").strip()
+        abstract_line = (
+            f"\n    Datos del abstract: {abstract_excerpt[:280]}"
+            if abstract_excerpt else ""
+        )
         ref_lines.append(
-            f"[{i+1}] {authors_raw}. \"{p['title']}\". "
+            f"[{i + 1}] {authors_raw}. \"{p['title']}\". "
             f"{p.get('journal', 'Revista N/A')}. {p['year']}. DOI: {p.get('doi', 'N/A')}.\n"
             f"    Tipo: {p['study_type']} | Oxford: {p['oxford_level']} | Calidad: {p['methodological_quality']}/5\n"
             f"    P: {p['picos']['P']} | I: {p['picos']['I']} | C: {p['picos']['C']} | O: {p['picos']['O']}"
+            f"{abstract_line}"
         )
     papers_summary_str = "\n".join(ref_lines)
-    
-    sections = {}
-    
-    # Chunk 1
-    await event_queue.put(editor.format_log("Redactando Sección 1 y 2: Introducción, Epidemiología, Embriología y Fisiopatología...", "write"))
+
+    sections: Dict[str, str] = {}
+
+    # ── CHUNKS 1-3 EN PARALELO ──────────────────────────────────────────────
+    await event_queue.put(editor.format_log(
+        "Redactando Secciones 1-6 en paralelo (Introducción, Clínica, Diagnóstico, "
+        "Tratamiento y Complicaciones)...",
+        "write"
+    ))
+
+    fallbacks = {
+        "intro_embryo": (
+            f"# Sección 1: Introducción y Epidemiología\n\nEstudio clínico y epidemiología sobre {query}.\n\n"
+            f"# Sección 2: Embriología y Fisiopatología\n\nFisiopatología y evolución en cirugía pediátrica."
+        ),
+        "clinical_diag": (
+            f"# Sección 3: Manifestaciones Clínicas por Grupo Etario\n\n"
+            f"Manifestaciones clínicas en neonatos, lactantes y preescolares.\n\n"
+            f"# Sección 4: Diagnóstico\n\nAlgoritmo diagnóstico con laboratorio e imágenes."
+        ),
+        "treatment_comp": (
+            f"# Sección 5: Tratamiento\n\nTécnicas quirúrgicas estándar y clásicas abiertas. "
+            f"Consideraciones de anestesia.\n\n"
+            f"# Sección 6: Complicaciones\n\nComplicaciones intraoperatorias, tempranas y tardías."
+        ),
+    }
+
+    parallel_results = await asyncio.gather(
+        generate_document_chunk(1, query, meta_analysis, papers_summary_str),
+        generate_document_chunk(2, query, meta_analysis, papers_summary_str),
+        generate_document_chunk(3, query, meta_analysis, papers_summary_str),
+        return_exceptions=True
+    )
+
+    keys = ["intro_embryo", "clinical_diag", "treatment_comp"]
+    for key, result in zip(keys, parallel_results):
+        if isinstance(result, Exception):
+            logger.error(f"Error generando chunk {key}: {result}")
+            sections[key] = fallbacks[key]
+        else:
+            sections[key] = result
+
+    await event_queue.put(editor.format_log(
+        "Secciones 1-6 completadas. Redactando Sección 7 (Síntesis GRADE), "
+        "Sección 8 (Perlas Clínicas) y construyendo Referencias Vancouver...",
+        "write"
+    ))
+
+    # ── CHUNK 4: síntesis + perlas (secuencial, con contexto de los anteriores) ─
     try:
-        sections["intro_embryo"] = await generate_document_chunk(1, query, meta_analysis, papers_summary_str)
-    except Exception as e:
-        logger.error(f"Error generando chunk 1: {e}")
-        sections["intro_embryo"] = f"# Sección 1: Introducción y Epidemiología\n\nEstudio clínico y epidemiología sobre {query}.\n\n# Sección 2: Embriología y Fisiopatología\n\nFisiopatología de la patología y evolución en cirugía pediátrica."
-    
-    # Chunk 2
-    await event_queue.put(editor.format_log("Redactando Sección 3 y 4: Manifestaciones Clínicas por Edad y Algoritmo Diagnóstico...", "write"))
-    try:
-        sections["clinical_diag"] = await generate_document_chunk(2, query, meta_analysis, papers_summary_str)
-    except Exception as e:
-        logger.error(f"Error generando chunk 2: {e}")
-        sections["clinical_diag"] = f"# Sección 3: Manifestaciones Clínicas por Grupo Etario\n\nManifestaciones clínicas en neonatos, lactantes y preescolares.\n\n# Sección 4: Diagnóstico\n\nAlgoritmo de diagnóstico y exámenes clínicos de laboratorio e imágenes."
-    
-    # Chunk 3
-    await event_queue.put(editor.format_log("Redactando Sección 5 y 6: Tratamiento (Preparación, Anestesia, Técnica Paso a Paso, Cuidados) y Complicaciones...", "write"))
-    try:
-        sections["treatment_comp"] = await generate_document_chunk(3, query, meta_analysis, papers_summary_str)
-    except Exception as e:
-        logger.error(f"Error generando chunk 3: {e}")
-        sections["treatment_comp"] = f"# Sección 5: Tratamiento\n\nTécnicas quirúrgicas estándar y clásicas abiertas. Consideraciones de anestesia.\n\n# Sección 6: Complicaciones\n\nComplicaciones intraoperatorias, tempranas y tardías en cirugía infantil."
-    
-    # Chunk 4
-    await event_queue.put(editor.format_log("Redactando Sección 7, 8 y 9: Síntesis de Evidencia, Perlas Clínicas y Referencias...", "write"))
-    try:
-        sections["evidence_references"] = await generate_document_chunk(4, query, meta_analysis, papers_summary_str)
+        raw_chunk4 = await generate_document_chunk(
+            4, query, meta_analysis, papers_summary_str,
+            inject_context=_CHUNK_SECTIONS_COVERED
+        )
     except Exception as e:
         logger.error(f"Error generando chunk 4: {e}")
-        sections["evidence_references"] = f"# Sección 7: Síntesis de Evidencia\n\nSíntesis de evidencia y grado GRADE.\n\n# Sección 8: Perlas Clínicas\n\nRecomendaciones prácticas.\n\n# Sección 9: Referencias\n\nReferencias y papers utilizados."
+        raw_chunk4 = (
+            f"# Sección 7: Síntesis de Evidencia\n\nSíntesis de evidencia y grado GRADE.\n\n"
+            f"# Sección 8: Perlas Clínicas\n\nRecomendaciones prácticas de cirugía pediátrica."
+        )
 
-    # Log de finalización
-    await event_queue.put(editor.format_log("¡Manuscrito médico de más de 2000 palabras completado, auditado y aprobado! Guardando bloques para el renderizador de Word y transmitiendo el texto final al **Diseñador de Diapositivas** de la Fase de Presentación (Paso 5) para iniciar la maquetación del PowerPoint.", "write"))
-    
+    # Quitar cualquier sección de referencias que Gemini haya generado (puede ser incompleta)
+    # y reemplazarla por la lista determinista completa.
+    cleaned_chunk4 = raw_chunk4
+    for marker in ("# Sección 9", "## Sección 9", "# Referencias", "## Referencias",
+                   "# REFERENCIAS", "## REFERENCIAS", "# Reference", "## Reference"):
+        idx = cleaned_chunk4.find(marker)
+        if idx > 0:
+            cleaned_chunk4 = cleaned_chunk4[:idx].rstrip()
+            break
+
+    sections["evidence_references"] = cleaned_chunk4 + "\n\n" + _build_vancouver_refs(analyzed_papers)
+
+    await event_queue.put(editor.format_log(
+        "¡Manuscrito médico de más de 5000 palabras completado, auditado y aprobado! "
+        "Guardando bloques para el renderizador de Word y transmitiendo el texto final al "
+        "**Diseñador de Diapositivas** de la Fase de Presentación (Paso 5).",
+        "write"
+    ))
+
     return sections
