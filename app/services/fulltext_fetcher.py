@@ -25,9 +25,13 @@ logger = logging.getLogger("fulltext_fetcher")
 # Email requerido por Unpaywall y OpenAlex (identificación educada, sin autenticación)
 _OA_EMAIL = "surgical-multiagent@openaccess.org"
 
-# Tiempo máximo por intento de descarga
-_TIMEOUT = 20.0
-_PDF_TIMEOUT = 40.0
+# Tiempos cortos para no bloquear el pipeline (el enriquecimiento es opcional)
+_TIMEOUT = 8.0
+_PDF_TIMEOUT = 15.0
+
+# Timeout objeto con connect corto para evitar cuelgues TCP en redes restringidas
+_API_TIMEOUT = httpx.Timeout(connect=4.0, read=_TIMEOUT, write=4.0, pool=4.0)
+_DL_TIMEOUT = httpx.Timeout(connect=4.0, read=_PDF_TIMEOUT, write=4.0, pool=4.0)
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +44,7 @@ async def _unpaywall_url(doi: str) -> Optional[str]:
         return None
     url = f"https://api.unpaywall.org/v2/{doi}?email={_OA_EMAIL}"
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_API_TIMEOUT) as client:
             r = await client.get(url)
             if r.status_code != 200:
                 return None
@@ -68,7 +72,7 @@ async def _europepmc_url(doi: str) -> Optional[str]:
         f"?query=DOI:{doi}&resultType=core&format=json&pageSize=1"
     )
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_API_TIMEOUT) as client:
             r = await client.get(search_url)
             if r.status_code != 200:
                 return None
@@ -104,7 +108,7 @@ async def _semantic_scholar_pdf_url(doi: str) -> Optional[str]:
         return None
     url = f"https://api.semanticscholar.org/graph/v1/paper/DOI:{doi}?fields=openAccessPdf,title"
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_API_TIMEOUT) as client:
             r = await client.get(url)
             if r.status_code != 200:
                 return None
@@ -130,7 +134,7 @@ async def _core_pdf_url(title: str) -> Optional[str]:
     query = re.sub(r"[^\w\s]", "", title)[:120]
     url = f"https://api.core.ac.uk/v3/search/works?q={query}&limit=3"
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_API_TIMEOUT) as client:
             r = await client.get(url, headers={"Accept": "application/json"})
             if r.status_code != 200:
                 return None
@@ -153,7 +157,7 @@ async def download_pdf(url: str, save_path: str) -> bool:
     """Descarga un PDF desde una URL y lo guarda en disco. Retorna True si OK."""
     try:
         async with httpx.AsyncClient(
-            timeout=_PDF_TIMEOUT,
+            timeout=_DL_TIMEOUT,
             follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0 (compatible; SurgicalResearch/1.0; +https://github.com)"}
         ) as client:
