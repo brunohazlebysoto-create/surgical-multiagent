@@ -15,6 +15,9 @@ _api_semaphore = asyncio.Semaphore(3)
 # Índice global para rotar las API Keys entre las llamadas concurrentes
 _current_key_idx = 0
 
+# Lock para proteger la rotación de clave de race conditions en contexto async
+_key_rotation_lock = asyncio.Lock()
+
 # Variable de contexto para almacenar llaves de API Gemini específicas de la ejecución actual (seguro contra asincronía)
 gemini_keys_context = contextvars.ContextVar("gemini_keys", default=None)
 
@@ -44,7 +47,6 @@ async def call_gemini(
     num_keys = len(keys_to_use)
 
     # Preparar el cuerpo de la petición (común para cualquier clave)
-
     contents = {
         "contents": [
             {
@@ -82,15 +84,16 @@ async def call_gemini(
 
     async with _api_semaphore:
         for attempt in range(max_attempts):
-            # Obtener el índice actual de la llave (siempre con módulo para evitar IndexError)
-            key_idx = _current_key_idx % num_keys
-            api_key = keys_to_use[key_idx]
-
+            # Leer el índice actual de forma atómica
+            async with _key_rotation_lock:
+                key_idx = _current_key_idx % num_keys
+                api_key = keys_to_use[key_idx]
 
             # Si es un placeholder, rotarla inmediatamente y continuar
             if not api_key or "Placeholder" in api_key or api_key.startswith("KEY"):
                 logger.warning(f"Llave Gemini en el índice {key_idx} es un placeholder o está vacía. Rotando al instante...")
-                _current_key_idx = (_current_key_idx + 1) % num_keys
+                async with _key_rotation_lock:
+                    _current_key_idx = (_current_key_idx + 1) % num_keys
                 continue
 
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
@@ -105,7 +108,8 @@ async def call_gemini(
                             f"Límite de cuota (429) alcanzado para la llave {key_idx}. "
                             f"Rotando al instante a la siguiente clave... (Intento {attempt + 1}/{max_attempts})"
                         )
-                        _current_key_idx = (_current_key_idx + 1) % num_keys
+                        async with _key_rotation_lock:
+                            _current_key_idx = (_current_key_idx + 1) % num_keys
                         
                         # Si hemos dado una vuelta completa a todas las llaves, dormir un momento
                         if (attempt + 1) % num_keys == 0:
@@ -128,8 +132,8 @@ async def call_gemini(
             except httpx.HTTPStatusError as e:
                 logger.error(f"Error HTTP de API Gemini (Intento {attempt + 1}, Llave {key_idx}): {e.response.status_code} - {e.response.text}")
                 
-                # Rotar la clave en caso de error del servidor
-                _current_key_idx = (_current_key_idx + 1) % num_keys
+                async with _key_rotation_lock:
+                    _current_key_idx = (_current_key_idx + 1) % num_keys
                 
                 if (attempt + 1) % num_keys == 0:
                     await asyncio.sleep(backoff)
@@ -138,8 +142,8 @@ async def call_gemini(
             except httpx.RequestError as e:
                 logger.error(f"Error de red al conectar con Gemini API (Intento {attempt + 1}, Llave {key_idx}): {e}")
                 
-                # Rotar la clave en caso de fallo de conexión
-                _current_key_idx = (_current_key_idx + 1) % num_keys
+                async with _key_rotation_lock:
+                    _current_key_idx = (_current_key_idx + 1) % num_keys
                 
                 if (attempt + 1) % num_keys == 0:
                     await asyncio.sleep(backoff)
