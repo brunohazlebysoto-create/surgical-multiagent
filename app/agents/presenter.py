@@ -177,7 +177,7 @@ async def run_presenter_panel(
     """
     
     try:
-        response_json_text = await call_gemini(prompt_pptx_json, json_mode=True, temperature=0.2)
+        response_json_text = await call_gemini(prompt_pptx_json, json_mode=True, temperature=0.2, thinking_budget=4096)
         data = json.loads(response_json_text)
         slides_list = data.get("slides", [])
         

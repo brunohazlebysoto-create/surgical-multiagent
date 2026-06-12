@@ -24,7 +24,7 @@ async def call_gemini(
     json_mode: bool = False,
     temperature: float = 0.2,
     inline_data: Optional[dict] = None,
-    thinking: bool = False
+    thinking_budget: int = 1024
 ) -> str:
     """
     Función base asíncrona para realizar llamadas a la API de Google Gemini sin SDKs,
@@ -58,9 +58,8 @@ async def call_gemini(
         }
     }
 
-    # Deshabilitar thinking cuando no se necesita razonamiento profundo (más rápido en free tier)
-    if not thinking:
-        contents["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}
+    # Budget de razonamiento: 0=sin thinking, 1024=mínimo, 8192=normal, -1=ilimitado
+    contents["generationConfig"]["thinkingConfig"] = {"thinkingBudget": thinking_budget}
 
     if inline_data:
         contents["contents"][0]["parts"].append({
