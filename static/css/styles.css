@@ -1174,3 +1174,279 @@ input[type="text"]:focus {
 
 
 
+
+/* ── Format Selector Panel ────────────────────────────────────────────────── */
+.format-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.format-section h3 {
+    font-family: var(--font-heading);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.format-options {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.format-option-card {
+    cursor: pointer;
+    flex: 1;
+    min-width: 160px;
+}
+
+.format-option-card input[type="radio"] {
+    display: none;
+}
+
+.format-card-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 16px 12px;
+    border: 2px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-secondary);
+    transition: border-color 0.2s, background 0.2s, transform 0.15s;
+    text-align: center;
+}
+
+.format-option-card input[type="radio"]:checked + .format-card-inner {
+    border-color: var(--accent-primary);
+    background: rgba(56, 189, 248, 0.08);
+    transform: translateY(-2px);
+}
+
+.format-card-inner > i {
+    font-size: 22px;
+    color: var(--accent-primary);
+}
+
+.format-label {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 13.5px;
+    color: var(--text-primary);
+}
+
+.format-desc {
+    font-size: 11.5px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.detail-badge {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 13px;
+    font-family: var(--font-heading);
+}
+
+.detail-badge.short  { background: #1e3a5f; color: #60a5fa; }
+.detail-badge.medium { background: #1e4d3f; color: #34d399; }
+.detail-badge.long   { background: #3b1f63; color: #a78bfa; }
+.detail-badge.xl     { background: #5c1c1c; color: #f87171; }
+
+/* ── Pipeline Config Panel ───────────────────────────────────────────────── */
+.pipeline-config-details {
+    margin-top: 18px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.pipeline-config-details summary {
+    padding: 10px 16px;
+    cursor: pointer;
+    font-family: var(--font-heading);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    user-select: none;
+    background: var(--bg-secondary);
+    list-style: none;
+}
+.pipeline-config-details summary::-webkit-details-marker { display: none; }
+.pipeline-config-details summary::after {
+    content: '▸';
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-secondary);
+    transition: transform 0.2s;
+}
+.pipeline-config-details[open] summary::after { transform: rotate(90deg); }
+
+.pipeline-toggle-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 4px 0;
+}
+
+.pipeline-toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 16px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border-color);
+    transition: background 0.15s;
+}
+.pipeline-toggle-row:last-child { border-bottom: none; }
+.pipeline-toggle-row:hover { background: rgba(56, 189, 248, 0.04); }
+
+.toggle-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.toggle-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.toggle-desc {
+    font-size: 11.5px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+/* Toggle switch */
+.toggle-switch-wrap {
+    flex-shrink: 0;
+    position: relative;
+    width: 42px;
+    height: 24px;
+}
+
+.toggle-input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+    position: absolute;
+}
+
+.toggle-switch {
+    position: absolute;
+    inset: 0;
+    background: var(--border-color);
+    border-radius: 24px;
+    cursor: pointer;
+    transition: background 0.25s;
+}
+
+.toggle-switch::before {
+    content: '';
+    position: absolute;
+    left: 3px;
+    top: 3px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: white;
+    transition: transform 0.25s;
+}
+
+.toggle-input:checked + .toggle-switch {
+    background: var(--accent-primary);
+}
+
+.toggle-input:checked + .toggle-switch::before {
+    transform: translateX(18px);
+}
+
+/* ── Sub-agent badges inside workflow nodes ──────────────────────────────── */
+.sub-agents {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 7px;
+}
+
+.sub-agent {
+    font-size: 10.5px;
+    padding: 2px 8px;
+    border-radius: 20px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    transition: background 0.3s, color 0.3s, border-color 0.3s;
+    white-space: nowrap;
+}
+
+.sub-agent.done {
+    background: rgba(16, 185, 129, 0.15);
+    border-color: #10b981;
+    color: #10b981;
+}
+
+.sub-agent.active {
+    background: rgba(56, 189, 248, 0.15);
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+    animation: pulse-badge 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-badge {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+}
+
+/* ── Full-text / free paper download ────────────────────────────────────── */
+.fulltext-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    background: rgba(16, 185, 129, 0.15);
+    border: 1px solid #10b981;
+    color: #10b981;
+    margin-top: 6px;
+}
+
+.free-paper-btn {
+    margin-top: 6px;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 8px;
+    background: transparent;
+    border: 1px solid var(--accent-secondary);
+    color: var(--accent-secondary);
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+}
+
+.free-paper-btn:hover:not(:disabled) {
+    background: rgba(56, 189, 248, 0.15);
+}
+
+.free-paper-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+}

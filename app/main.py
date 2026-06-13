@@ -65,23 +65,39 @@ async def auth_check(password: Optional[str] = Query(None)):
         return {"status": "authenticated"}
     return {"status": "unauthorized"}
 
+class PipelineConfig(BaseModel):
+    reranking: bool = True
+    pmc_download: bool = True
+    multimodal_pdf: bool = True
+
 class SearchRequest(BaseModel):
     query: str
+    pipeline_config: PipelineConfig = PipelineConfig()
 
 class ConfirmRequest(BaseModel):
     selected_dois: List[str]
 
-async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, run_id: str, client_keys: List[str] = None):
+class ConfirmFormatRequest(BaseModel):
+    output_format: str = "both"   # "word", "pptx", "both"
+    detail_level: str = "long"    # "short", "medium", "long", "very_detailed"
+
+async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, run_id: str, client_keys: List[str] = None, pipeline_config: dict = None):
     """
     Orquesta el flujo del multi-agente.
     Pausa el flujo al finalizar el Paso 1 (Búsqueda) y espera confirmación del usuario.
     """
     from app.agents.base import gemini_keys_context
     token = gemini_keys_context.set(client_keys)
+    cfg = pipeline_config or {}
+    # Inyectar run_id en la queue para que fulltext_fetcher pueda guardar PDFs
+    event_queue._run_id = run_id
     try:
 
         # Paso 1: Panel de Búsqueda
-        papers = await run_search_panel(query, event_queue)
+        papers = await run_search_panel(
+            query, event_queue,
+            use_reranking=cfg.get("reranking", True)
+        )
         
         # Almacenar en la memoria de la ejecución
         global_runs[run_id]["papers_found"] = papers
@@ -111,40 +127,59 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
         if not selected_papers:
             selected_papers = all_available_papers[:15]
             
-        # Descargar figuras de PMC para los papers seleccionados
-        from app.services.document_parser import download_pmc_figures
-        await event_queue.put({
-            "agent": "Sistema", "role": "Extractor",
-            "color": "#a855f7", "icon": "📥", "stage": "analyze",
-            "content": "Buscando y descargando figuras/gráficos de PubMed Central para los papers seleccionados..."
-        })
-        for paper in selected_papers:
-            doi = paper.get("doi")
-            if doi and not doi.startswith("user_upload_"):
-                try:
-                    pmc_figs = await download_pmc_figures(doi, run_id)
-                    if pmc_figs:
-                        global_runs[run_id]["extracted_images"].extend(pmc_figs)
-                except Exception as e:
-                    logger.error(f"Error descargando figuras PMC para {doi}: {e}")
+        # Descargar figuras de PMC (si está habilitado en config)
+        if cfg.get("pmc_download", True):
+            from app.services.document_parser import download_pmc_figures
+            await event_queue.put({
+                "agent": "Sistema", "role": "Extractor",
+                "color": "#a855f7", "icon": "📥", "stage": "analyze",
+                "content": "Buscando y descargando figuras/gráficos de PubMed Central para los papers seleccionados..."
+            })
+            for paper in selected_papers:
+                doi = paper.get("doi")
+                if doi and not doi.startswith("user_upload_"):
+                    try:
+                        pmc_figs = await download_pmc_figures(doi, run_id)
+                        if pmc_figs:
+                            global_runs[run_id]["extracted_images"].extend(pmc_figs)
+                    except Exception as e:
+                        logger.error(f"Error descargando figuras PMC para {doi}: {e}")
             
+        # Preguntar al usuario formato de salida y longitud antes de generar
+        await event_queue.put({
+            "agent": "Sistema", "role": "Configurador",
+            "color": "#a855f7", "icon": "⚙️", "stage": "output_format_required",
+            "content": "Figuras procesadas. Antes de iniciar el análisis, elige el formato de salida y la extensión del documento.",
+            "papers_count": len(selected_papers)
+        })
+        logger.info(f"Pipeline {run_id} esperando configuración de formato.")
+        await global_runs[run_id]["format_trigger"].wait()
+        logger.info(f"Pipeline {run_id} reanudado con formato: {global_runs[run_id]['output_format']}, nivel: {global_runs[run_id]['detail_level']}")
+
+        output_format = global_runs[run_id]["output_format"]
+        detail_level = global_runs[run_id]["detail_level"]
+
         await event_queue.put({
             "agent": "Sistema", "role": "Analizador",
             "color": "#10b981", "icon": "✅", "stage": "analyze",
-            "content": f"Figuras procesadas. Iniciando Paso 2: Análisis PICO-S con {len(selected_papers)} artículos..."
+            "content": f"Iniciando Paso 2: Análisis PICO-S con {len(selected_papers)} artículos..."
         })
-        
+
         # Paso 2: Panel de Análisis PICO-S (usando solo la selección)
         analyzed_papers = await run_analyzer_panel(selected_papers, event_queue)
-        
+
         # Paso 3: Panel de Meta-Análisis
         meta_analysis = await run_meta_analyst_panel(analyzed_papers, query, event_queue)
-        
-        # Paso 4: Panel de Redacción Científica (Word)
-        sections = await run_writer_panel(meta_analysis, analyzed_papers, query, event_queue)
-        
-        # Paso 5: Panel de Presentación (PowerPoint)
-        slides = await run_presenter_panel(meta_analysis, analyzed_papers, query, event_queue)
+
+        # Paso 4: Panel de Redacción Científica (Word) — omitir si solo PPT
+        sections = {}
+        if output_format in ("word", "both"):
+            sections = await run_writer_panel(meta_analysis, analyzed_papers, query, event_queue, detail_level=detail_level)
+
+        # Paso 5: Panel de Presentación (PowerPoint) — omitir si solo Word
+        slides = []
+        if output_format in ("pptx", "both"):
+            slides = await run_presenter_panel(meta_analysis, analyzed_papers, query, event_queue, detail_level=detail_level)
         
         # --- RENDERIZACIÓN DE ARCHIVOS ---
         run_dir = f"static/downloads/{run_id}"
@@ -154,29 +189,36 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
         pptx_filepath = f"{run_dir}/presentacion_profesional.pptx"
         json_filepath = f"{run_dir}/meta_analisis.json"
         
-        # Generar Word
-        await event_queue.put({
-            "agent": "Sistema de Compilación", "role": "Renderizador", 
-            "color": "#a855f7", "icon": "⚙️", "stage": "render", 
-            "content": "Renderizando documento científico de Word (.docx) con estilo Navy..."
-        })
-        prisma_data = {
-            "identified": len(global_runs[run_id]["papers_found"]) * 4 + 10,
-            "screened": len(global_runs[run_id]["papers_found"]) + len(global_runs[run_id]["uploaded_papers"]),
-            "excluded": (len(global_runs[run_id]["papers_found"]) + len(global_runs[run_id]["uploaded_papers"])) - len(selected_papers),
-            "included": len(selected_papers)
-        }
-        build_docx(sections, docx_filepath, query, 
-                   extracted_images=global_runs[run_id]["extracted_images"],
-                   prisma_data=prisma_data)
-        
-        # Generar PowerPoint
-        await event_queue.put({
-            "agent": "Sistema de Compilación", "role": "Renderizador", 
-            "color": "#a855f7", "icon": "⚙️", "stage": "render", 
-            "content": "Renderizando presentación de PowerPoint (.pptx) detallada..."
-        })
-        build_pptx(slides, pptx_filepath, run_id=run_id)
+        output_format = global_runs[run_id]["output_format"]
+
+        # Generar Word (si aplica)
+        if output_format in ("word", "both"):
+            await event_queue.put({
+                "agent": "Sistema de Compilación", "role": "Renderizador",
+                "color": "#a855f7", "icon": "⚙️", "stage": "render",
+                "content": "Renderizando documento científico de Word (.docx) con estilo Navy..."
+            })
+            prisma_data = {
+                "identified": len(global_runs[run_id]["papers_found"]) * 4 + 10,
+                "screened": len(global_runs[run_id]["papers_found"]) + len(global_runs[run_id]["uploaded_papers"]),
+                "excluded": (len(global_runs[run_id]["papers_found"]) + len(global_runs[run_id]["uploaded_papers"])) - len(selected_papers),
+                "included": len(selected_papers)
+            }
+            build_docx(sections, docx_filepath, query,
+                       extracted_images=global_runs[run_id]["extracted_images"],
+                       prisma_data=prisma_data,
+                       meta_analysis=meta_analysis)
+            global_runs[run_id]["docx_path"] = f"/static/downloads/{run_id}/apunte_clinico.docx"
+
+        # Generar PowerPoint (si aplica)
+        if output_format in ("pptx", "both"):
+            await event_queue.put({
+                "agent": "Sistema de Compilación", "role": "Renderizador",
+                "color": "#a855f7", "icon": "⚙️", "stage": "render",
+                "content": "Renderizando presentación de PowerPoint (.pptx) detallada..."
+            })
+            build_pptx(slides, pptx_filepath, run_id=run_id)
+            global_runs[run_id]["pptx_path"] = f"/static/downloads/{run_id}/presentacion_profesional.pptx"
         
         # Guardar JSON de Meta-análisis
         await event_queue.put({
@@ -187,9 +229,6 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
         with open(json_filepath, "w", encoding="utf-8") as f:
             json.dump(meta_analysis, f, ensure_ascii=False, indent=2)
             
-        # Actualizar base de datos de descargas
-        global_runs[run_id]["docx_path"] = f"/static/downloads/{run_id}/apunte_clinico.docx"
-        global_runs[run_id]["pptx_path"] = f"/static/downloads/{run_id}/presentacion_profesional.pptx"
         global_runs[run_id]["json_path"] = f"/static/downloads/{run_id}/meta_analisis.json"
         
         # Evento de éxito final
@@ -240,19 +279,25 @@ async def start_pipeline(
         "json_path": None,
         "query": request.query,
         "step2_trigger": asyncio.Event(),
+        "format_trigger": asyncio.Event(),
         "papers_found": [],
         "uploaded_papers": [],
         "selected_dois": [],
-        "extracted_images": []
+        "extracted_images": [],
+        "output_format": "both",
+        "detail_level": "long"
     }
     
     # Parsear claves de API enviadas por el cliente
     client_keys = []
     if x_gemini_api_keys:
         client_keys = [k.strip() for k in x_gemini_api_keys.split(",") if k.strip()]
-    
-    # Agregar la tarea en segundo plano pasándole las claves
-    background_tasks.add_task(execute_multiagent_pipeline, request.query, event_queue, run_id, client_keys)
+
+    # Serializar pipeline_config como dict plano
+    pipeline_config = request.pipeline_config.model_dump() if request.pipeline_config else {}
+
+    # Agregar la tarea en segundo plano pasándole las claves y config
+    background_tasks.add_task(execute_multiagent_pipeline, request.query, event_queue, run_id, client_keys, pipeline_config)
     
     return {"run_id": run_id}
 
@@ -266,11 +311,34 @@ async def confirm_selection(run_id: str, request: ConfirmRequest, _ = Depends(ve
         raise HTTPException(status_code=404, detail="Ejecución no encontrada")
         
     global_runs[run_id]["selected_dois"] = request.selected_dois
-    
+
     # Reanudar la tarea en background
     global_runs[run_id]["step2_trigger"].set()
-    
+
     return {"status": "success"}
+
+
+@app.post("/api/confirm-format/{run_id}")
+async def confirm_format(run_id: str, request: ConfirmFormatRequest, _ = Depends(verify_access)):
+    """
+    Recibe la elección de formato de salida (word/pptx/both) y nivel de detalle.
+    """
+    if run_id not in global_runs:
+        raise HTTPException(status_code=404, detail="Ejecución no encontrada")
+
+    valid_formats = {"word", "pptx", "both"}
+    valid_levels = {"short", "medium", "long", "very_detailed"}
+    if request.output_format not in valid_formats:
+        raise HTTPException(status_code=400, detail=f"output_format inválido. Use: {valid_formats}")
+    if request.detail_level not in valid_levels:
+        raise HTTPException(status_code=400, detail=f"detail_level inválido. Use: {valid_levels}")
+
+    global_runs[run_id]["output_format"] = request.output_format
+    global_runs[run_id]["detail_level"] = request.detail_level
+    global_runs[run_id]["format_trigger"].set()
+
+    return {"status": "success"}
+
 
 @app.post("/api/upload")
 async def upload_document(
@@ -328,6 +396,39 @@ async def upload_document(
         raise HTTPException(status_code=500, detail=f"Error parseando el archivo: {str(e)}")
     finally:
         gemini_keys_context.reset(token)
+
+
+class FreeSearchRequest(BaseModel):
+    doi: str
+    title: str = ""
+
+@app.post("/api/search-free/{run_id}")
+async def search_free_paper(run_id: str, request: FreeSearchRequest, _ = Depends(verify_access)):
+    """
+    Busca la versión gratuita y legal de un paper en Unpaywall, Semantic Scholar OA,
+    Europe PMC y CORE. Si se encuentra, descarga el PDF y lo añade como paper subido.
+    """
+    if run_id not in global_runs:
+        raise HTTPException(status_code=404, detail="Ejecución no encontrada")
+
+    from app.services.fulltext_fetcher import fetch_free_fulltext
+    save_dir = f"static/downloads/{run_id}/fulltext"
+
+    pdf_path, full_text = await fetch_free_fulltext(
+        doi=request.doi,
+        title=request.title,
+        save_dir=save_dir
+    )
+
+    if not pdf_path or not full_text:
+        return {"status": "not_found", "message": "No se encontró versión libre de acceso abierto para este paper."}
+
+    return {
+        "status": "found",
+        "pdf_path": pdf_path,
+        "text_preview": full_text[:400],
+        "chars": len(full_text)
+    }
 
 
 @app.get("/api/stream/{run_id}")

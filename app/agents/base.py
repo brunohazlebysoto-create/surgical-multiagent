@@ -90,7 +90,6 @@ async def call_gemini(
             key_idx = _current_key_idx % num_keys
             api_key = keys_to_use[key_idx]
 
-
             # Si es un placeholder, rotarla inmediatamente y continuar
             if not api_key or "Placeholder" in api_key or api_key.startswith("KEY"):
                 logger.warning(f"Llave Gemini en el índice {key_idx} es un placeholder o está vacía. Rotando al instante...")
@@ -98,57 +97,60 @@ async def call_gemini(
                 continue
 
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
-            
+
             try:
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     response = await client.post(url, json=contents)
-                    
-                    # Si da error de tasa límite (429), rotar clave de inmediato
+
                     if response.status_code == 429:
                         logger.warning(
                             f"Límite de cuota (429) alcanzado para la llave {key_idx}. "
                             f"Rotando al instante a la siguiente clave... (Intento {attempt + 1}/{max_attempts})"
                         )
                         _current_key_idx = (_current_key_idx + 1) % num_keys
-                        
-                        # Si hemos dado una vuelta completa a todas las llaves, dormir un momento
                         if (attempt + 1) % num_keys == 0:
                             logger.info(f"Se probó el carrusel completo de {num_keys} llaves. Esperando {backoff}s antes de reintentar...")
                             await asyncio.sleep(backoff)
                             backoff *= 1.5
                         continue
-                        
+
                     response.raise_for_status()
-                    
+
                     data = response.json()
-                    # Extraer el texto de la respuesta
                     try:
-                        text_response = data["candidates"][0]["content"]["parts"][0]["text"]
-                        return text_response.strip()
+                        text_response = data["candidates"][0]["content"]["parts"][0]["text"].strip()
                     except (KeyError, IndexError) as err:
                         logger.error(f"Estructura de respuesta inesperada de Gemini API: {data}. Error: {err}")
                         return '{"error": "Respuesta vacía o incorrecta"}' if json_mode else "Error: Estructura de respuesta de API inválida."
-                        
+
+                    # Validar JSON si se pidió json_mode — reintentar si es inválido
+                    if json_mode:
+                        try:
+                            import json as _json
+                            cleaned = text_response.lstrip("```json").lstrip("```").rstrip("```").strip()
+                            _json.loads(cleaned)
+                            return cleaned
+                        except (_json.JSONDecodeError, ValueError):
+                            logger.warning(f"Gemini devolvió JSON inválido en intento {attempt + 1}. Reintentando...")
+                            # No rotar clave, solo reintentar con la misma
+                            continue
+
+                    return text_response
+
             except httpx.HTTPStatusError as e:
                 logger.error(f"Error HTTP de API Gemini (Intento {attempt + 1}, Llave {key_idx}): {e.response.status_code} - {e.response.text}")
-                
-                # Rotar la clave en caso de error del servidor
                 _current_key_idx = (_current_key_idx + 1) % num_keys
-                
                 if (attempt + 1) % num_keys == 0:
                     await asyncio.sleep(backoff)
                     backoff *= 1.5
-                    
+
             except httpx.RequestError as e:
                 logger.error(f"Error de red al conectar con Gemini API (Intento {attempt + 1}, Llave {key_idx}): {e}")
-                
-                # Rotar la clave en caso de fallo de conexión
                 _current_key_idx = (_current_key_idx + 1) % num_keys
-                
                 if (attempt + 1) % num_keys == 0:
                     await asyncio.sleep(backoff)
                     backoff *= 1.5
-                    
+
         raise Exception("Se agotaron todos los reintentos y llaves configuradas para la API de Gemini.")
 
 

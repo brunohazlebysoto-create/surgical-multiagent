@@ -4,8 +4,8 @@ import logging
 import math
 import re
 import xml.etree.ElementTree as ET
-from datetime import datetime
 import httpx
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 from app.agents.base import BaseAgent, call_gemini
 
@@ -572,10 +572,16 @@ async def _run_apis(search_term: str) -> List[Dict[str, Any]]:
 
     # Filtrar ciencia básica y deduplicar
     clinical = [p for p in all_papers if _is_clinical_paper(p.get("title", ""), p.get("abstract", ""))]
-    return _deduplicate(clinical)
+    deduped = _deduplicate(clinical)
+
+    # Preferir papers con abstract útil (≥80 chars). Solo incluir los sin abstract
+    # si el pool de calidad no llega a 10 candidatos.
+    rich = [p for p in deduped if len((p.get("abstract") or "")) >= 80]
+    poor = [p for p in deduped if len((p.get("abstract") or "")) < 80]
+    return rich + poor if len(rich) < 10 else rich
 
 
-async def run_search_panel(query: str, event_queue: asyncio.Queue) -> List[Dict[str, Any]]:
+async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking: bool = True) -> List[Dict[str, Any]]:
     """
     Paso 1: Panel de Búsqueda.
     Búsqueda en vivo a través de PubMed (con abstracts reales via efetch XML),
@@ -715,15 +721,18 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue) -> List[Dict[
         ))
 
     # ── PRE-RANKING DETERMINISTA (calidad/recencia/citas/abstract) ────────
-    # Ordena por score antes del reranker: mejora la entrada del modelo y, sobre
-    # todo, garantiza que el fallback (si Gemini falla) conserve los mejores papers.
+    # Ordena por score antes del reranker: mejora la entrada del modelo y,
+    # sobre todo, garantiza que el fallback (si Gemini falla) conserve los mejores papers.
     all_candidates = _rank_candidates(all_candidates, query)
 
-    # ── RERANKING con Gemini ──────────────────────────────────────────────
-    # Target dinámico: hasta 25 papers si hay suficientes candidatos de calidad
+    # ── RERANKING con Gemini (opcional) ──────────────────────────────────
     n = len(all_candidates)
     target = 25 if n >= 25 else (20 if n >= 20 else n)
-    final_papers = await rerank_papers(query, all_candidates, event_queue, target=target)
+    if use_reranking:
+        final_papers = await rerank_papers(query, all_candidates, event_queue, target=target)
+    else:
+        final_papers = all_candidates[:target]
+        logger.info(f"Reranking desactivado. Usando top-{target} por scoring determinista.")
 
     # ── TURNO 3: REVISOR CRÍTICO ──────────────────────────────────────────
     logger.info("Paso 1 › Turno 3: Revisor Crítico")
@@ -776,5 +785,23 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue) -> List[Dict[
         logger.error(f"Agente 3 falló: {e}. Usando fallback.")
         agente3_msg = f"**AGENTE 3 — REVISOR**: Se recuperaron **{len(final_papers)} artículos** para la consulta '{query}'. Pasan al análisis PICO-S en el Paso 2."
     await event_queue.put(refinador.format_log(agente3_msg, "search"))
+
+    # ── ENRIQUECIMIENTO CON TEXTO COMPLETO (fuentes OA gratuitas) ────────────
+    # Timeout duro de 40 s para que el enriquecimiento nunca bloquee el pipeline.
+    try:
+        from app.services.fulltext_fetcher import enrich_papers_with_fulltext
+        run_id_for_ft = getattr(event_queue, "_run_id", None)
+        final_papers = await asyncio.wait_for(
+            enrich_papers_with_fulltext(
+                final_papers, event_queue,
+                run_id=run_id_for_ft or "tmp",
+                max_papers=5
+            ),
+            timeout=40.0
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Enriquecimiento fulltext: timeout de 40s alcanzado. Continuando sin texto completo.")
+    except Exception as e:
+        logger.error(f"Error en enriquecimiento fulltext: {e}")
 
     return final_papers

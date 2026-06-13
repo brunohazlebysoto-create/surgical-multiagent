@@ -70,6 +70,45 @@ document.addEventListener("DOMContentLoaded", () => {
     const confirmBtn = document.getElementById("confirm-selection-btn");
     const selectionCounter = document.getElementById("selection-counter");
 
+    // Elementos del selector de formato
+    const formatPanel = document.getElementById("format-panel");
+
+    // Mapa: fragmento del nombre del agente SSE → ID del badge de sub-agente
+    const AGENT_BADGE_MAP = {
+        "TERMINÓLOGO": "sa-terminologo",
+        "ESTRATEGA":   "sa-estratega",
+        "RERANKER":    "sa-reranker",
+        "REVISOR":     "sa-revisor",
+        "Extractor Clínico": "sa-extractor",
+        "Auditor de Evidencia": "sa-auditor-ev",
+        "Curador PICO-S": "sa-curador",
+        "Sintetizador": "sa-sintetizador",
+        "Bioestadístico": "sa-bioestadistico",
+        "Metodólogo": "sa-metodólogo",
+        "Redactor Médico": "sa-redactor",
+        "Auditor Farmacológico": "sa-auditor-qx",
+        "Editor en Jefe": "sa-editor",
+        "Diseñador de Diapositivas": "sa-disenador",
+        "Auditor Visual": "sa-auditor-vis",
+        "Programador PPTX": "sa-programador",
+        "Compilación": "sa-compilador",
+        "Renderizador": "sa-compilador"
+    };
+
+    function markSubAgent(agentName, done = false) {
+        for (const [key, badgeId] of Object.entries(AGENT_BADGE_MAP)) {
+            if (agentName && agentName.includes(key)) {
+                const el = document.getElementById(badgeId);
+                if (el) {
+                    el.classList.remove("active", "done");
+                    el.classList.add(done ? "done" : "active");
+                }
+                break;
+            }
+        }
+    }
+    const confirmFormatBtn = document.getElementById("confirm-format-btn");
+
     // Botones de Descarga
     const downloadWordBtn = document.getElementById("download-word-btn");
     const downloadPptxBtn = document.getElementById("download-pptx-btn");
@@ -291,6 +330,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 node.classList.add("pending");
             }
         });
+        // Reset all sub-agent badges
+        document.querySelectorAll(".sub-agent").forEach(el => {
+            el.classList.remove("active", "done");
+        });
     }
 
     function completeAllPipelineNodes() {
@@ -301,6 +344,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 node.classList.remove("pending", "active");
                 node.classList.add("completed");
             }
+        });
+        // Mark all sub-agent badges as done
+        document.querySelectorAll(".sub-agent").forEach(el => {
+            el.classList.remove("active");
+            el.classList.add("done");
         });
     }
 
@@ -425,10 +473,58 @@ document.addEventListener("DOMContentLoaded", () => {
             details.appendChild(meta);
             details.appendChild(toggleBtn);
             details.appendChild(abstractDiv);
-            
+
+            // Indicador de texto completo disponible
+            if (paper.has_fulltext) {
+                const ftBadge = document.createElement("span");
+                ftBadge.className = "fulltext-badge";
+                ftBadge.innerHTML = `<i class="fa-solid fa-file-lines"></i> Texto completo`;
+                details.appendChild(ftBadge);
+            } else if (paper.doi && !paper.doi.startsWith("pubmed_") && !paper.doi.startsWith("user_upload_")) {
+                // Botón buscar versión libre
+                const freeBtn = document.createElement("button");
+                freeBtn.className = "btn btn-outline btn-xs free-paper-btn";
+                freeBtn.innerHTML = `<i class="fa-solid fa-magnifying-glass"></i> Buscar versión libre`;
+                freeBtn.dataset.doi = paper.doi;
+                freeBtn.dataset.title = paper.title;
+                freeBtn.addEventListener("click", async (e) => {
+                    e.stopPropagation();
+                    freeBtn.disabled = true;
+                    freeBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Buscando...`;
+                    try {
+                        const resp = await fetch(`/api/search-free/${currentRunId}`, {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/json",
+                                "X-Access-Password": localStorage.getItem("access_password") || ""
+                            },
+                            body: JSON.stringify({ doi: paper.doi, title: paper.title })
+                        });
+                        const result = await resp.json();
+                        if (result.status === "found") {
+                            freeBtn.className = "btn btn-xs fulltext-badge";
+                            freeBtn.innerHTML = `<i class="fa-solid fa-check"></i> Texto completo (${Math.round(result.chars/1000)}k chars)`;
+                            freeBtn.disabled = true;
+                            // Actualizar abstract visible
+                            if (result.text_preview) {
+                                abstractDiv.innerText = result.text_preview + "...";
+                            }
+                        } else {
+                            freeBtn.innerHTML = `<i class="fa-solid fa-lock"></i> Solo de pago`;
+                            freeBtn.disabled = true;
+                            freeBtn.style.opacity = "0.5";
+                        }
+                    } catch {
+                        freeBtn.innerHTML = `<i class="fa-solid fa-xmark"></i> Error`;
+                        freeBtn.disabled = false;
+                    }
+                });
+                details.appendChild(freeBtn);
+            }
+
             card.appendChild(checkbox);
             card.appendChild(details);
-            
+
             papersContainer.appendChild(card);
         });
         
@@ -590,6 +686,39 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
+    // --- CONFIRMAR FORMATO DE SALIDA ---
+    confirmFormatBtn.addEventListener("click", async () => {
+        if (!currentRunId) return;
+
+        const outputFormat = document.querySelector('input[name="output_format"]:checked')?.value || "both";
+        const detailLevel = document.querySelector('input[name="detail_level"]:checked')?.value || "long";
+
+        confirmFormatBtn.disabled = true;
+        confirmFormatBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Iniciando análisis...`;
+
+        try {
+            const response = await fetch(`/api/confirm-format/${currentRunId}`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-Access-Password": localStorage.getItem("access_password") || ""
+                },
+                body: JSON.stringify({ output_format: outputFormat, detail_level: detailLevel })
+            });
+
+            if (!response.ok) throw new Error("Error al confirmar formato.");
+
+            formatPanel.classList.add("hidden");
+            startBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Analizando...`;
+
+        } catch (error) {
+            console.error(error);
+            alert("No se pudo configurar el formato. Inténtalo de nuevo.");
+            confirmFormatBtn.disabled = false;
+            confirmFormatBtn.innerHTML = `<i class="fa-solid fa-rocket"></i> Iniciar Análisis Completo`;
+        }
+    });
+
     // --- Iniciar Proceso (Llamada al Backend) ---
     startBtn.addEventListener("click", async () => {
         const query = queryInput.value.trim();
@@ -604,14 +733,17 @@ document.addEventListener("DOMContentLoaded", () => {
         downloadsPanel.classList.add("hidden");
         updateApiQuotaVisual(100, "Salud: 100%", "normal");
         selectionPanel.classList.add("hidden");
+        formatPanel.classList.add("hidden");
         uploadedList.innerHTML = "";
         availablePapers = [];
         selectedDois.clear();
-        
+
         // Reactivar dropzone
         uploadDropzone.style.pointerEvents = "auto";
         uploadDropzone.style.opacity = "1";
         confirmBtn.innerHTML = `<i class="fa-solid fa-circle-check"></i> Confirmar y Continuar Análisis`;
+        confirmFormatBtn.disabled = false;
+        confirmFormatBtn.innerHTML = `<i class="fa-solid fa-rocket"></i> Iniciar Análisis Completo`;
 
         startBtn.disabled = true;
         startBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Buscando papers...`;
@@ -632,10 +764,15 @@ document.addEventListener("DOMContentLoaded", () => {
             if (clientKeys) {
                 headers["X-Gemini-API-Keys"] = clientKeys;
             }
+            const pipeline_config = {
+                reranking:   document.getElementById("toggle-reranking")?.checked ?? true,
+                pmc_download: document.getElementById("toggle-pmc")?.checked ?? true,
+                multimodal_pdf: document.getElementById("toggle-multimodal")?.checked ?? true
+            };
             const response = await fetch("/api/start", {
                 method: "POST",
                 headers: headers,
-                body: JSON.stringify({ query: query })
+                body: JSON.stringify({ query: query, pipeline_config })
             });
 
 
@@ -674,9 +811,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 
                 // Agregar burbuja de chat
                 addChatBubble(data);
-                
+
+                // Actualizar badge de sub-agente en tiempo real
+                if (data.agent) markSubAgent(data.agent, false);
+
                 // Actualizar pipeline de nodos
-                if (data.stage && !["completed", "failed", "selection_required"].includes(data.stage)) {
+                if (data.stage && !["completed", "failed", "selection_required", "output_format_required"].includes(data.stage)) {
                     updatePipelineNodes(data.stage);
                     
                     // Actualizar círculo de cuota API
@@ -698,24 +838,31 @@ document.addEventListener("DOMContentLoaded", () => {
                 // CASO ESPECIAL: Se requiere interactividad del usuario
                 if (data.stage === "selection_required") {
                     updatePipelineNodes("search");
-                    
+
                     // Modificar estado de botón principal
                     startBtn.innerHTML = `<i class="fa-solid fa-hourglass-half"></i> Esperando Selección...`;
-                    
+
                     // Cargar los papers candidatos devueltos
                     availablePapers = data.papers || [];
-                    
+
                     // Seleccionar todos por defecto inicialmente
                     selectedDois.clear();
                     availablePapers.forEach(p => selectedDois.add(p.doi));
-                    
+
                     renderPapersList();
-                    
+
                     // Mostrar panel de selección y hacer scroll suave hacia él
                     selectionPanel.classList.remove("hidden");
                     selectionPanel.scrollIntoView({ behavior: "smooth" });
                 }
-                
+
+                // CASO ESPECIAL: Selector de formato de salida
+                if (data.stage === "output_format_required") {
+                    startBtn.innerHTML = `<i class="fa-solid fa-hourglass-half"></i> Configurando salida...`;
+                    formatPanel.classList.remove("hidden");
+                    formatPanel.scrollIntoView({ behavior: "smooth" });
+                }
+
                 // Si completó con éxito
                 if (data.stage === "completed") {
                     eventSource.close();
@@ -765,15 +912,29 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // --- Configurar Enlaces de Descarga ---
     function setupDownloadLinks(runId) {
-        downloadWordBtn.onclick = () => {
-            window.location.href = `/api/downloads/${runId}/word`;
-        };
-        downloadPptxBtn.onclick = () => {
-            window.location.href = `/api/downloads/${runId}/powerpoint`;
-        };
-        downloadJsonBtn.onclick = () => {
-            window.location.href = `/api/downloads/${runId}/json`;
-        };
+        const outputFormat = document.querySelector('input[name="output_format"]:checked')?.value || "both";
+
+        if (downloadWordBtn) {
+            if (outputFormat === "pptx") {
+                downloadWordBtn.disabled = true;
+                downloadWordBtn.title = "No solicitado en esta ejecución";
+            } else {
+                downloadWordBtn.disabled = false;
+                downloadWordBtn.onclick = () => { window.location.href = `/api/downloads/${runId}/word`; };
+            }
+        }
+        if (downloadPptxBtn) {
+            if (outputFormat === "word") {
+                downloadPptxBtn.disabled = true;
+                downloadPptxBtn.title = "No solicitado en esta ejecución";
+            } else {
+                downloadPptxBtn.disabled = false;
+                downloadPptxBtn.onclick = () => { window.location.href = `/api/downloads/${runId}/powerpoint`; };
+            }
+        }
+        if (downloadJsonBtn) {
+            downloadJsonBtn.onclick = () => { window.location.href = `/api/downloads/${runId}/json`; };
+        }
     }
 
     // --- Renderizar Biblioteca de Evidencia ---
