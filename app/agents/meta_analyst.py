@@ -98,40 +98,11 @@ async def run_meta_analyst_panel(
        - "controversies": Lista de controversias citando los estudios en conflicto.
        - "clinical_implications": Recomendaciones prácticas citando la evidencia de respaldo.
        - "evidence_range_years": Objeto con "min" y "max" (enteros) del rango de años de los estudios.
-       - "numerical_facts": Lista de objetos {{
-           "fact": "descripción de la cifra clínica concreta (ej. 'Tasa de complicaciones LP: 8.3%')",
-           "value": "valor exacto con unidades",
-           "citation": "Apellido et al. (Año)"
-         }} — extrae TODAS las cifras numéricas concretas que aparezcan en los abstracts del corpus
-         (porcentajes, tiempos, OR, RR, n de muestra, tasas, dosis). Mínimo 8 hechos si el corpus lo permite.
-         Estos hechos son la única fuente autorizada de cifras para el redactor y deben extraerse
-         literalmente del corpus, NO fabricados.
-       - "grade_domains": Lista de exactamente 5 objetos evaluando cada dominio GRADE basándose en los
-         estudios del corpus:
-         [
-           {{"domain": "Riesgo de Sesgo", "assessment": "...", "impact": "Serio/No serio/Muy serio"}},
-           {{"domain": "Inconsistencia", "assessment": "...", "impact": "..."}},
-           {{"domain": "Evidencia Indirecta", "assessment": "...", "impact": "..."}},
-           {{"domain": "Imprecisión", "assessment": "...", "impact": "..."}},
-           {{"domain": "Sesgo de Publicación", "assessment": "...", "impact": "..."}}
-         ]
-         Basa cada assessment en los estudios concretos del corpus.
-       - "forest_plot_data": Lista de objetos para cada estudio del corpus que reporte un desenlace
-         comparativo (OR, RR, HR, reducción de riesgo, etc.):
-         [
-           {{"label": "Apellido et al. (Año)", "or": 0.72, "ci_lower": 0.51, "ci_upper": 1.02, "n": 150, "weight": 20.5}},
-           ...
-         ]
-         Donde "or" es la medida de efecto (OR/RR/HR — normaliza a este campo; usa 1.0 si no se reporta),
-         "ci_lower" y "ci_upper" son los límites del IC 95% (estima como or ± 0.3 si no se reportan),
-         "n" es el tamaño muestral (usa 0 si se desconoce), y "weight" es el peso relativo en %
-         (distribuye uniformemente si se desconoce). Incluye como último elemento la entrada global:
-         {{"label": "Estimado Global (Pool)", "or": ..., "ci_lower": ..., "ci_upper": ..., "n": ..., "weight": 100, "is_summary": true}}
 
     Devuelve un JSON exacto con las claves raíz: "synthesizer_log", "bias_opponent_log", "meta_analysis".
     El objeto "meta_analysis" debe contener: "global_evidence_level", "grade_recommendation",
     "comparison_findings", "knowledge_gaps", "controversies", "clinical_implications",
-    "evidence_range_years", "numerical_facts", "grade_domains", "forest_plot_data".
+    "evidence_range_years".
     """
     
     try:
@@ -146,22 +117,13 @@ async def run_meta_analyst_panel(
         required_keys = [
             "global_evidence_level", "grade_recommendation", "comparison_findings",
             "knowledge_gaps", "controversies", "clinical_implications",
-            "evidence_range_years", "numerical_facts", "grade_domains", "forest_plot_data"
+            "evidence_range_years"
         ]
-        list_keys = ("knowledge_gaps", "controversies", "numerical_facts", "forest_plot_data")
-        default_grade_domains = [
-            {"domain": "Riesgo de Sesgo", "assessment": "No evaluado", "impact": "No serio"},
-            {"domain": "Inconsistencia", "assessment": "No evaluado", "impact": "No serio"},
-            {"domain": "Evidencia Indirecta", "assessment": "No evaluado", "impact": "No serio"},
-            {"domain": "Imprecisión", "assessment": "No evaluado", "impact": "No serio"},
-            {"domain": "Sesgo de Publicación", "assessment": "No evaluado", "impact": "No serio"},
-        ]
+        list_keys = ("knowledge_gaps", "controversies")
         for rk in required_keys:
             if rk not in final_meta:
                 if rk in list_keys:
                     final_meta[rk] = []
-                elif rk == "grade_domains":
-                    final_meta[rk] = default_grade_domains
                 else:
                     final_meta[rk] = "N/A"
         if not isinstance(final_meta.get("evidence_range_years"), dict):
@@ -187,16 +149,7 @@ async def run_meta_analyst_panel(
             "evidence_range_years": {
                 "min": min(years) if years else 2000,
                 "max": max(years) if years else 2024
-            },
-            "numerical_facts": [],
-            "grade_domains": [
-                {"domain": "Riesgo de Sesgo", "assessment": "No evaluado", "impact": "No serio"},
-                {"domain": "Inconsistencia", "assessment": "No evaluado", "impact": "No serio"},
-                {"domain": "Evidencia Indirecta", "assessment": "No evaluado", "impact": "No serio"},
-                {"domain": "Imprecisión", "assessment": "No evaluado", "impact": "No serio"},
-                {"domain": "Sesgo de Publicación", "assessment": "No evaluado", "impact": "No serio"},
-            ],
-            "forest_plot_data": []
+            }
         }
         
     # Enviar mensajes del debate a la cola de logs

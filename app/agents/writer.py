@@ -95,31 +95,24 @@ async def generate_document_chunk(
     """
     wt = _DETAIL_WORD_TARGETS.get(detail_level, _DETAIL_WORD_TARGETS["long"])
 
-    # Contexto de grounding: hechos numéricos extraídos directamente del corpus
-    numerical_facts = meta_analysis.get("numerical_facts") or []
+    # Rango de evidencia como nota de contexto (sin inyección de hechos numéricos)
     evidence_range = meta_analysis.get("evidence_range_years") or {}
     ev_min = evidence_range.get("min", "")
     ev_max = evidence_range.get("max", "")
-    evidence_currency = (
-        f"La evidencia disponible abarca publicaciones de {ev_min} a {ev_max}."
+    evidence_note = (
+        f"        Nota: la evidencia analizada abarca publicaciones de {ev_min} a {ev_max}.\n"
         if ev_min and ev_max else ""
     )
 
-    if numerical_facts:
-        import json as _json
-        facts_str = "\n".join(
-            f"  - {f.get('fact', '')}: {f.get('value', '')} ({f.get('citation', '')})"
-            for f in numerical_facts
-        )
-        grounding_block = f"""
-        HECHOS NUMÉRICOS VERIFICADOS DEL CORPUS (úsalos textualmente — NO los inventes):
-        {facts_str}
-        {evidence_currency}
-        ADVERTENCIA: Si un dato numérico NO aparece en esta lista ni en la Lista de referencias,
-        NO lo incluyas en el texto. Indica la ausencia de dato en cambio de inventarlo.
-        """
-    else:
-        grounding_block = f"\n        {evidence_currency}\n" if evidence_currency else ""
+    # Resumen clínico compacto del meta-análisis (solo los campos esenciales)
+    meta_summary = {
+        "global_evidence_level": meta_analysis.get("global_evidence_level", ""),
+        "grade_recommendation":  meta_analysis.get("grade_recommendation", ""),
+        "comparison_findings":   meta_analysis.get("comparison_findings", ""),
+        "clinical_implications": meta_analysis.get("clinical_implications", ""),
+        "knowledge_gaps":        meta_analysis.get("knowledge_gaps", []),
+        "controversies":         meta_analysis.get("controversies", []),
+    }
 
     citation_rule = """
         REGLA DE CITACIÓN OBLIGATORIA: Toda afirmación clínica, estadística, técnica o diagnóstica
@@ -128,12 +121,14 @@ async def generate_document_chunk(
         continuación. Incluye MÍNIMO 5 citas por sección. Cada porcentaje, medida, dosis o hallazgo
         clave debe tener su cita correspondiente."""
 
+    import json as _j
+    meta_str = _j.dumps(meta_summary, ensure_ascii=False)
+
     prompts = {
         1: f"""
         Eres un Redactor Médico especializado en cirugía pediátrica.
         Escribe un manuscrito extremadamente detallado para las siguientes secciones del tema "{query}".
-        {grounding_block}
-
+{evidence_note}
         SECCIÓN 1: Introducción, Caso Clínico de Gancho y Epidemiología
         - Inicia OBLIGATORIAMENTE con un Caso Clínico Simulado (Clinical Case Vignette) detallado
           como gancho inicial (edad pediátrica, síntomas, hallazgos físicos, laboratorio e imágenes).
@@ -149,18 +144,14 @@ async def generate_document_chunk(
         - Usa títulos en Markdown (# para secciones principales, ## para subsecciones).
         {citation_rule}
 
-        Meta-análisis GRADE disponible:
-        {meta_analysis}
-
-        Lista de referencias disponibles para citar (usa estas y solo estas):
-        {papers_summary}
+        Síntesis GRADE: {meta_str}
+        Lista de referencias (cita solo estas): {papers_summary}
         """,
 
         2: f"""
         Eres un Redactor Médico especializado en cirugía pediátrica.
         Escribe un manuscrito extremadamente detallado para las siguientes secciones del tema "{query}".
-        {grounding_block}
-
+{evidence_note}
         SECCIÓN 3: Manifestaciones Clínicas por Grupo Etario
         - Cómo varían síntomas según edad (neonato, lactante, preescolar, escolar, adolescente).
         - Porcentajes de frecuencia estadística de síntomas principales según la literatura.
@@ -178,18 +169,14 @@ async def generate_document_chunk(
         - Usa tablas Markdown estructuradas.
         {citation_rule}
 
-        Meta-análisis GRADE disponible:
-        {meta_analysis}
-
-        Lista de referencias disponibles para citar (usa estas y solo estas):
-        {papers_summary}
+        Síntesis GRADE: {meta_str}
+        Lista de referencias (cita solo estas): {papers_summary}
         """,
 
         3: f"""
         Eres un Redactor Médico especializado en cirugía pediátrica.
         Escribe un manuscrito extremadamente detallado para las siguientes secciones del tema "{query}".
-        {grounding_block}
-
+{evidence_note}
         SECCIÓN 5: Tratamiento
         - Preparación preoperatoria: Holliday-Segar (4-2-1), reposición de pérdidas, corrección
           electrolítica, ayuno regla 2-4-6.
@@ -211,11 +198,8 @@ async def generate_document_chunk(
         - Escribe un mínimo de {wt['c3']} palabras para estas secciones.
         {citation_rule}
 
-        Meta-análisis GRADE disponible:
-        {meta_analysis}
-
-        Lista de referencias disponibles para citar (usa estas y solo estas):
-        {papers_summary}
+        Síntesis GRADE: {meta_str}
+        Lista de referencias (cita solo estas): {papers_summary}
         """,
 
         4: f"""
@@ -223,8 +207,7 @@ async def generate_document_chunk(
 
         Eres un Redactor Médico especializado en cirugía pediátrica.
         Escribe ÚNICAMENTE las siguientes secciones del tema "{query}".
-        {grounding_block}
-
+{evidence_note}
         SECCIÓN 7: Síntesis de Evidencia
         - Resumen cruzado comparando las técnicas o estrategias según los estudios analizados.
         - Recomendación GRADE definitiva (A/B/C/D) con justificación basada en los papers.
@@ -242,19 +225,14 @@ async def generate_document_chunk(
         - NO incluyas una sección de Referencias — esa se genera automáticamente.
         {citation_rule}
 
-        Meta-análisis GRADE disponible:
-        {meta_analysis}
-
-        Lista de referencias disponibles para citar (usa estas y solo estas):
-        {papers_summary}
+        Síntesis GRADE: {meta_str}
+        Lista de referencias (cita solo estas): {papers_summary}
         """
     }
 
-    # max_output_tokens explícito y alto: con thinking_budget=8192, sin este límite el
-    # razonamiento puede agotar el presupuesto de salida por defecto y truncar la prosa.
     return await call_gemini(
-        prompts[chunk_id], temperature=0.25, thinking_budget=8192,
-        timeout=180.0, max_output_tokens=16384
+        prompts[chunk_id], temperature=0.25, thinking_budget=4096,
+        timeout=150.0, max_output_tokens=12288
     )
 
 
@@ -318,7 +296,7 @@ async def run_writer_panel(
         first_author = authors_raw.split(",")[0].strip()
         abstract_excerpt = (p.get("abstract") or "").strip()
         abstract_line = (
-            f"\n    Datos del abstract: {abstract_excerpt[:280]}"
+            f"\n    Extracto: {abstract_excerpt[:120]}"
             if abstract_excerpt else ""
         )
         ref_lines.append(

@@ -167,20 +167,6 @@ def _build_content_slides(
             "speaker_notes": "Estas son las controversias activas en la literatura sobre el tema."
         })
 
-    # Forest plot si hay datos
-    if (meta_analysis.get("forest_plot_data") or []):
-        slides.append({
-            "layout": "forest_plot",
-            "title": "Análisis del Forest Plot de Eficacia",
-            "bullets": [
-                "El gráfico muestra los Odds Ratio (OR) e intervalos de confianza de cada estudio.",
-                "El rombo inferior representa el estimado global ponderado (pool).",
-                "Valores de OR < 1 favorecen la técnica de intervención.",
-            ],
-            "references": "Meta-análisis del corpus",
-            "speaker_notes": "El forest plot integra visualmente la magnitud del efecto de cada estudio."
-        })
-
     # Tabla de evidencia con los papers reales
     rows = []
     for p in analyzed_papers[:6]:
@@ -270,65 +256,70 @@ async def run_presenter_panel(
 
     papers_json_str = json.dumps(papers_subset, ensure_ascii=False)
 
+    meta_lean = {
+        "global_evidence_level": meta_analysis.get("global_evidence_level", ""),
+        "grade_recommendation":  meta_analysis.get("grade_recommendation", ""),
+        "comparison_findings":   meta_analysis.get("comparison_findings", ""),
+        "clinical_implications": meta_analysis.get("clinical_implications", ""),
+        "knowledge_gaps":        meta_analysis.get("knowledge_gaps", []),
+        "controversies":         meta_analysis.get("controversies", []),
+    }
+
     prompt_pptx_json = f"""
     Eres el Programador PPTX. Genera una lista completa y muy detallada de diapositivas clínicas
     explicativas sobre "{query}".
     Información de soporte:
-    - Meta-análisis GRADE: {meta_analysis}
-    - Papers disponibles para citar (usa el campo "citation" de cada uno): {papers_json_str}
+    - Síntesis GRADE: {json.dumps(meta_lean, ensure_ascii=False)}
+    - Papers para citar (usa el campo "citation"): {papers_json_str}
 
-    REGLA DE CITACIÓN OBLIGATORIA: El campo "references" de cada diapositiva DEBE contener la cita
-    en formato (Apellido et al., Año) del o los papers que respaldan esa diapositiva, tomando los
-    valores exactos del campo "citation" de la lista de papers. Cuando cites datos en las viñetas,
-    incluye la cita dentro del texto (ej. "LP: tiempo a alimentación completa 12h vs 18h en cirugía
-    abierta (Oomen et al., 2021)"). Solo usa "Consenso de Expertos / Evidencia General" si ningún
-    paper del corpus es relevante para esa diapositiva.
-    
-    Cada diapositiva debe incluir obligatoriamente un campo "speaker_notes" que contenga un guión dinámico, formal e informativo de 2-4 líneas en español que el cirujano ponente debe decir en voz alta al presentar este slide (ej. "En esta diapositiva observamos que...").
-    
-    Cada diapositiva debe tener uno de los siguientes layouts lógicos:
-    1. "title" (campos: "title", "subtitle", "references", "speaker_notes")
-    2. "bullet_points" (campos: "title", "bullets" - lista de strings, máximo 5 viñetas, "references", "speaker_notes". IMPORTANTE: Cada viñeta debe ser explicativa y detallar bien la idea en 1 o 2 frases largas y descriptivas, no solo palabras clave sueltas).
-    3. "comparison_table" (campos: "title", "headers" - lista de strings, "rows" - lista de listas de strings, máximo 3 columnas y 6 filas, "references", "speaker_notes")
-    4. "comparison_2col" (campos: "title", "col1_title" - string, "col1_bullets" - lista de strings, "col2_title" - string, "col2_bullets" - lista de strings, "references", "speaker_notes")
-    5. "step_process" (campos: "title", "steps" - lista de strings detallando un proceso de manera descriptiva, "references", "speaker_notes")
-    6. "metrics" (campos: "title", "metric_value" - número o frase corta destacada, "metric_label" - descripción detallada de la métrica, "references", "speaker_notes")
-    7. "multimodal_chart" (campos: "title", "bullets" - lista de strings analizando una figura o imagen clínica, "references", "speaker_notes")
-    8. "forest_plot" (campos: "title", "bullets" - lista de strings interpretando los Odds Ratios del Forest Plot, "references", "speaker_notes")
-    
-    Instrucciones críticas:
-    - Basa el orden clínico, las comparaciones y las descripciones directamente en los papers provistos, citándolos explícitamente en el texto de las viñetas (ej. 'Evidencia: Oomen et al.').
-    - Genera {_SLIDE_TARGETS.get(detail_level, "entre 40 y 60")} diapositivas. Explica a fondo cada concepto clínico, especialmente las técnicas quirúrgicas actuales, las técnicas tradicionales y la evolución histórica.
-    - La Diapositiva de Tabla de Evidencia debe completarse utilizando los datos estructurados en: {papers_json_str}.
-    
-    Asegúrate de incluir y expandir detalladamente las siguientes secciones, dedicando múltiples diapositivas a las secciones complejas:
-    1. Título de la presentación (layout "title")
-    2. Objetivos académicos y clínicos (layout "bullet_points")
-    3. Introducción general y Caso Clínico Simulado (Clinical Case Vignette) como gancho (layout "bullet_points")
-    4. Epidemiología (incidencia, prevalencia, factores de riesgo) (layout "metrics")
-    5. Embriología y Desarrollo Anátomopatológico (layout "bullet_points")
-    6. Fisiopatología detallada y cambios tisulares/funcionales (layout "bullet_points")
-    7. Anatomía Quirúrgica Pediátrica relevante y relaciones anatómicas de seguridad (layout "bullet_points")
-    8. Manifestaciones Clínicas y su presentación según grupo etario (layout "comparison_2col" o "comparison_table")
-    9. Diagnóstico Clínico (anamnesis, examen físico, signos clínicos cardinales) (layout "bullet_points")
-    10. Diagnóstico por Imágenes (criterios cuantitativos, ultrasonido, radiografía, etc.) (layout "multimodal_chart")
-    11. Diagnóstico Diferencial de patologías similares (layout "comparison_table")
-    12. Preparación Preoperatoria (regla Holiday-Segar 4-2-1, ayuno 2-4-6) (layout "bullet_points")
-    13. Anestesia Pediátrica (vía aérea, inducción, dosis seguras por peso) (layout "bullet_points")
-    14. Técnica Quirúrgica Estándar Actual (paso a paso minucioso) (layout "step_process")
-    15. Técnica Quirúrgica Abierta Clásica (paso a paso detallado) (layout "step_process")
-    16. Técnicas Quirúrgicas Históricas y Evolución (comparación) (layout "comparison_2col")
-    17. Cuidados Postoperatorios Inmediatos y Esquemas de Alimentación (layout "bullet_points")
-    18. Algoritmos de Tratamiento por Scores y Escalas de Severidad (layout "bullet_points")
-    19. Complicaciones Intraoperatorias (lesiones, sangrado) (layout "bullet_points")
-    20. Complicaciones Postoperatorias Tempranas y Tardías con porcentajes de incidencia reales (layout "bullet_points")
-    21. Seguimiento Clínico y Criterios de Alta Hospitalaria (layout "bullet_points")
-    22. Casos Clínicos Complejos y Desafíos (bajo peso, prematuros) (layout "bullet_points")
-    23. Perlas Clínicas Quirúrgicas y Sabiduría Práctica (layout "bullet_points")
-    24. Errores Comunes en el Diagnóstico y en la Cirugía (layout "bullet_points")
-    25. Tabla de Evidencia Científica (usar comparison_table con {papers_json_str})
-    26. Análisis Estadístico del Forest Plot de Eficacia (layout "forest_plot")
-    27. Conclusiones y Preguntas de Discusión para el equipo (layout "bullet_points")
+    REGLA DE CITACIÓN: El campo "references" de cada diapositiva DEBE contener la cita
+    (Apellido et al., Año) tomada del campo "citation" de los papers. Cuando cites datos en las
+    viñetas inclúyela en el texto (ej. "12h vs 18h (Oomen et al., 2021)"). Solo usa
+    "Consenso de Expertos / Evidencia General" si ningún paper es relevante para esa diapositiva.
+
+    Cada diapositiva incluye un campo "speaker_notes" con guión de 2-4 líneas en español para el ponente.
+
+    Layouts disponibles:
+    1. "title"           → campos: title, subtitle, references, speaker_notes
+    2. "bullet_points"   → campos: title, bullets (máx 5 viñetas explicativas, 1-2 frases c/u), references, speaker_notes
+    3. "comparison_table"→ campos: title, headers (lista), rows (lista de listas, máx 3 cols × 6 filas), references, speaker_notes
+    4. "comparison_2col" → campos: title, col1_title, col1_bullets, col2_title, col2_bullets, references, speaker_notes
+    5. "step_process"    → campos: title, steps (lista descriptiva), references, speaker_notes
+    6. "metrics"         → campos: title, metric_value (valor destacado), metric_label (descripción), references, speaker_notes
+    7. "multimodal_chart"→ campos: title, bullets (análisis de imagen clínica), references, speaker_notes
+
+    Instrucciones:
+    - Genera {_SLIDE_TARGETS.get(detail_level, "entre 40 y 60")} diapositivas con contenido clínico real.
+    - Cita los papers explícitamente en las viñetas (ej. "Evidencia: Oomen et al.").
+    - Cada viñeta debe ser explicativa (1-2 frases), nunca solo palabras clave sueltas.
+
+    Secciones obligatorias (múltiples diapositivas por sección compleja):
+    1. Título de la presentación ("title")
+    2. Objetivos académicos y clínicos ("bullet_points")
+    3. Introducción y Caso Clínico de Gancho ("bullet_points")
+    4. Epidemiología ("metrics")
+    5. Embriología y Desarrollo Anatomopatológico ("bullet_points")
+    6. Fisiopatología detallada ("bullet_points")
+    7. Anatomía Quirúrgica Pediátrica y reparos de seguridad ("bullet_points")
+    8. Manifestaciones Clínicas por grupo etario ("comparison_2col" o "comparison_table")
+    9. Diagnóstico Clínico ("bullet_points")
+    10. Diagnóstico por Imágenes ("multimodal_chart")
+    11. Diagnóstico Diferencial ("comparison_table")
+    12. Preparación Preoperatoria — Holliday-Segar 4-2-1, ayuno 2-4-6 ("bullet_points")
+    13. Anestesia Pediátrica — dosis mg/kg ("bullet_points")
+    14. Técnica Quirúrgica Actual paso a paso ("step_process")
+    15. Técnica Abierta Clásica paso a paso ("step_process")
+    16. Evolución Histórica de Técnicas ("comparison_2col")
+    17. Cuidados Postoperatorios y Alimentación ("bullet_points")
+    18. Algoritmos y Scores de Severidad ("bullet_points")
+    19. Complicaciones Intraoperatorias ("bullet_points")
+    20. Complicaciones Postoperatorias — incidencias % ("bullet_points")
+    21. Seguimiento y Criterios de Alta ("bullet_points")
+    22. Casos Clínicos Complejos — prematuros, bajo peso ("bullet_points")
+    23. Perlas Clínicas Quirúrgicas ("bullet_points")
+    24. Errores Comunes en Diagnóstico y Cirugía ("bullet_points")
+    25. Tabla de Evidencia Científica ("comparison_table" con los papers)
+    26. Conclusiones y Preguntas de Discusión ("bullet_points")
     
     Genera un JSON con este formato estricto:
     {{
