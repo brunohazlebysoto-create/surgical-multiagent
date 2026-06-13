@@ -441,13 +441,28 @@ document.addEventListener("DOMContentLoaded", () => {
             
             // Badge según procedencia
             const badge = document.createElement("span");
-            if (paper.authors.includes("Usuario")) {
+            if (paper.authors && paper.authors.includes("Usuario")) {
                 badge.classList.add("badge-upload");
                 badge.innerText = "PROPIO";
+            } else if (paper.is_guideline) {
+                badge.classList.add("badge-guideline");
+                badge.innerText = "GUÍA CLÍNICA";
             } else {
                 badge.classList.add("badge-pubmed");
                 badge.innerText = "PUBMED/DB";
             }
+
+            // Badge OA disponible (verificado antes de la selección)
+            const oaBadge = paper.oa_available ? (() => {
+                const b = document.createElement("a");
+                b.className = "fulltext-badge oa-badge";
+                b.href = paper.oa_url || "#";
+                b.target = "_blank";
+                b.rel = "noopener noreferrer";
+                b.innerHTML = `<i class="fa-solid fa-lock-open"></i> Acceso Abierto`;
+                b.title = "PDF gratuito disponible (clic para abrir)";
+                return b;
+            })() : null;
             
             const metaText = document.createTextNode(` | ${paper.authors} (${paper.year}) • ${paper.journal}`);
             meta.appendChild(badge);
@@ -520,6 +535,11 @@ document.addEventListener("DOMContentLoaded", () => {
                     }
                 });
                 details.appendChild(freeBtn);
+            }
+
+            // Badge de acceso abierto verificado (link directo al PDF libre)
+            if (oaBadge) {
+                details.appendChild(oaBadge);
             }
 
             card.appendChild(checkbox);

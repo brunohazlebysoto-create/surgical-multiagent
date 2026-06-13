@@ -24,7 +24,8 @@ async def call_gemini(
     json_mode: bool = False,
     temperature: float = 0.2,
     inline_data: Optional[dict] = None,
-    thinking_budget: int = 1024
+    thinking_budget: int = 1024,
+    timeout: float = 30.0
 ) -> str:
     """
     Función base asíncrona para realizar llamadas a la API de Google Gemini sin SDKs,
@@ -99,7 +100,7 @@ async def call_gemini(
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
 
             try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
+                async with httpx.AsyncClient(timeout=timeout) as client:
                     response = await client.post(url, json=contents)
 
                     if response.status_code == 429:

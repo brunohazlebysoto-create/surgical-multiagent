@@ -102,15 +102,38 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
         
         # Almacenar en la memoria de la ejecución
         global_runs[run_id]["papers_found"] = papers
-        
+
+        # Verificar disponibilidad OA para todos los papers ANTES de mostrarlos al usuario
+        # El usuario verá qué papers son de acceso libre directamente en la lista de selección
+        await event_queue.put({
+            "agent": "Sistema", "role": "Verificador OA",
+            "color": "#a855f7", "icon": "🔓", "stage": "search",
+            "content": f"Verificando disponibilidad de acceso abierto para los {len(papers)} papers encontrados..."
+        })
+        try:
+            from app.services.fulltext_fetcher import check_oa_availability_batch
+            papers = await asyncio.wait_for(
+                check_oa_availability_batch(papers),
+                timeout=20.0
+            )
+            global_runs[run_id]["papers_found"] = papers
+            oa_count = sum(1 for p in papers if p.get("oa_available"))
+            await event_queue.put({
+                "agent": "Sistema", "role": "Verificador OA",
+                "color": "#10b981", "icon": "🔓", "stage": "search",
+                "content": f"**{oa_count}/{len(papers)}** papers disponibles en acceso abierto (PDF gratuito legal). Los papers marcados con 🔓 pueden descargarse completos para el análisis."
+            })
+        except Exception as e:
+            logger.warning(f"Verificación OA no disponible: {e}")
+
         # Combinar papers encontrados con los subidos hasta este momento
         combined_papers = papers + global_runs[run_id]["uploaded_papers"]
-        
+
         # Enviar evento de pausa solicitando selección interactiva
         await event_queue.put({
             "agent": "Sistema", "role": "Selector",
             "color": "#a855f7", "icon": "⚙️", "stage": "selection_required",
-            "content": "Búsqueda finalizada. Por favor, selecciona los artículos científicos que deseas utilizar y/o sube tus propios archivos antes de continuar.",
+            "content": f"Búsqueda finalizada. Se encontraron **{len(papers)}** papers ({sum(1 for p in papers if p.get('oa_available'))} con acceso abierto 🔓). Selecciona los artículos para el análisis.",
             "papers": combined_papers
         })
         
@@ -166,23 +189,28 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
             "content": f"Iniciando Paso 2: Análisis PICO-S con {len(selected_papers)} artículos..."
         })
 
-        # Enriquecimiento automático de texto completo antes del análisis
+        # Enriquecimiento automático de texto completo — TODOS los papers seleccionados
         if cfg.get("pmc_download", True):
+            n_with_doi = sum(
+                1 for p in selected_papers
+                if p.get("doi") and not p["doi"].startswith("pubmed_") and not p["doi"].startswith("user_upload_")
+            )
             await event_queue.put({
                 "agent": "Sistema", "role": "Enriquecedor",
                 "color": "#f59e0b", "icon": "📄", "stage": "analyze",
-                "content": f"Descargando texto completo de los top artículos seleccionados (máx. 6)..."
+                "content": f"Descargando texto completo de **todos** los {n_with_doi} papers seleccionados con DOI (Unpaywall, S2OA, Europe PMC, OpenAlex, CORE)..."
             })
             try:
+                # Timeout escalado al número de papers; todos corren en paralelo así que
+                # el tiempo real es ~igual al paper más lento, no la suma
+                enrich_timeout = max(90.0, n_with_doi * 5.0)
                 selected_papers = await asyncio.wait_for(
-                    enrich_papers_with_fulltext(selected_papers, event_queue, run_id=run_id, max_papers=6),
-                    timeout=60.0
+                    enrich_papers_with_fulltext(
+                        selected_papers, event_queue, run_id=run_id,
+                        max_papers=len(selected_papers)  # sin límite: todos los seleccionados
+                    ),
+                    timeout=enrich_timeout
                 )
-                await event_queue.put({
-                    "agent": "Sistema", "role": "Enriquecedor",
-                    "color": "#f59e0b", "icon": "📄", "stage": "analyze",
-                    "content": "Enriquecimiento de texto completo completado."
-                })
             except Exception as e:
                 logger.warning(f"Enriquecimiento de texto completo fallido (no fatal): {e}")
 

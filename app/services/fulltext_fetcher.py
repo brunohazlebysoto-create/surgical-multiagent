@@ -222,6 +222,76 @@ def extract_text_from_pdf_path(pdf_path: str, max_chars: int = 15000) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Verificación rápida de disponibilidad OA (sin descargar PDF)
+# ---------------------------------------------------------------------------
+
+_OA_CHECK_TIMEOUT = httpx.Timeout(connect=3.0, read=5.0, write=3.0, pool=3.0)
+
+async def _check_oa_fast(doi: str) -> Optional[str]:
+    """Consulta Unpaywall + OpenAlex en paralelo para ver si un DOI tiene acceso libre.
+    Retorna la URL OA si está disponible, None si no. Timeout agresivo: no bloquea el pipeline."""
+    if not doi or doi.startswith("pubmed_") or doi.startswith("user_upload_"):
+        return None
+    async def _unpaywall():
+        try:
+            async with httpx.AsyncClient(timeout=_OA_CHECK_TIMEOUT) as c:
+                r = await c.get(f"https://api.unpaywall.org/v2/{doi}?email={_OA_EMAIL}")
+                if r.status_code == 200:
+                    best = r.json().get("best_oa_location") or {}
+                    return best.get("url_for_pdf") or best.get("url")
+        except Exception:
+            pass
+        return None
+
+    async def _openalex():
+        try:
+            async with httpx.AsyncClient(timeout=_OA_CHECK_TIMEOUT) as c:
+                r = await c.get(
+                    f"https://api.openalex.org/works/doi:{doi}?select=open_access",
+                    headers={"User-Agent": f"mailto:{_OA_EMAIL}"}
+                )
+                if r.status_code == 200:
+                    oa = r.json().get("open_access") or {}
+                    return oa.get("oa_url")
+        except Exception:
+            pass
+        return None
+
+    results = await asyncio.gather(_unpaywall(), _openalex(), return_exceptions=True)
+    for r in results:
+        if isinstance(r, str) and r:
+            return r
+    return None
+
+
+async def check_oa_availability_batch(papers: list) -> list:
+    """
+    Para cada paper con DOI real, verifica si hay versión de acceso abierto.
+    Añade campos 'oa_url' (str|None) y 'oa_available' (bool) a cada paper.
+    Corre en paralelo con timeout agresivo — no bloquea si las APIs tardan.
+    """
+    async def _check_one(paper: dict) -> dict:
+        doi = paper.get("doi", "")
+        oa_url = await _check_oa_fast(doi)
+        paper = dict(paper)
+        paper["oa_url"] = oa_url
+        paper["oa_available"] = bool(oa_url)
+        return paper
+
+    updated = await asyncio.gather(
+        *[_check_one(p) for p in papers],
+        return_exceptions=True
+    )
+    result = []
+    for i, r in enumerate(updated):
+        if isinstance(r, Exception):
+            result.append(papers[i])
+        else:
+            result.append(r)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Función principal orquestadora
 # ---------------------------------------------------------------------------
 

@@ -52,7 +52,7 @@ async def run_analyzer_panel(papers: List[Dict[str, Any]], event_queue: asyncio.
         "authors": p["authors"],
         "journal": p["journal"],
         "year": p["year"],
-        "abstract": (p.get("abstract") or "")[:800] # Limitar ligeramente el abstract para ahorrar tokens y manejar None
+        "abstract": (p.get("abstract") or "")[:500]  # 500 chars es suficiente para PICO-S; full-text truncado evita prompt gigante
     } for idx, p in enumerate(papers)]
     
     prompt_batch = f"""
@@ -96,7 +96,7 @@ async def run_analyzer_panel(papers: List[Dict[str, Any]], event_queue: asyncio.
     
     analyzed_papers = []
     try:
-        response_text = await call_gemini(prompt_batch, json_mode=True, temperature=0.1, thinking_budget=4096)
+        response_text = await call_gemini(prompt_batch, json_mode=True, temperature=0.1, thinking_budget=0, timeout=120.0)
         batch_data = json.loads(response_text)
         analyses_list = {a["id"]: a for a in batch_data.get("analyses", [])}
         
