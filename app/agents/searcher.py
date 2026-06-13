@@ -736,7 +736,10 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
     search_term = query
     search_term_broad: Optional[str] = None
     try:
-        raw = await call_gemini(prompt_agente1, json_mode=True, temperature=0.1)
+        raw = await asyncio.wait_for(
+            call_gemini(prompt_agente1, json_mode=True, temperature=0.1, thinking_budget=0, timeout=45.0),
+            timeout=50.0
+        )
         cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         data = json.loads(cleaned)
         proposal = data.get("log_content", "")
@@ -772,7 +775,10 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
     """
 
     try:
-        agente2_msg = await call_gemini(prompt_agente2, temperature=0.2)
+        agente2_msg = await asyncio.wait_for(
+            call_gemini(prompt_agente2, temperature=0.2, thinking_budget=0, timeout=40.0),
+            timeout=45.0
+        )
     except Exception as e:
         logger.error(f"Agente 2 falló: {e}. Usando fallback.")
         agente2_msg = f"**AGENTE 2 — ESTRATEGA**: Búsqueda configurada para `{search_term}` en PubMed, Semantic Scholar, CrossRef y OpenAlex. Aplicando filtros pediátricos y de alta evidencia."
@@ -887,7 +893,7 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
         "journal": p["journal"],
         "year": p["year"],
         "doi": p["doi"],
-        "abstract": (p.get("abstract") or "")[:500],
+        "abstract": (p.get("abstract") or "")[:150],
     } for p in papers_to_review], ensure_ascii=False)
 
     prompt_agente3 = f"""
@@ -923,7 +929,10 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
     """
 
     try:
-        agente3_msg = await call_gemini(prompt_agente3, temperature=0.2)
+        agente3_msg = await asyncio.wait_for(
+            call_gemini(prompt_agente3, temperature=0.2, thinking_budget=0, timeout=50.0),
+            timeout=55.0
+        )
     except Exception as e:
         logger.error(f"Agente 3 falló: {e}. Usando fallback.")
         agente3_msg = f"**AGENTE 3 — REVISOR**: Se recuperaron **{len(final_papers)} artículos** para la consulta '{query}'. Pasan al análisis PICO-S en el Paso 2."
