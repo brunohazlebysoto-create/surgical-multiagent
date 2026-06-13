@@ -480,6 +480,10 @@ async def rerank_papers(
         "search"
     ))
 
+    # Pre-rank locally to reduce Gemini prompt size — send at most 40 candidates
+    pre_ranked = _rank_candidates(papers, query)
+    pool = pre_ranked[:40]
+
     papers_summary = [
         {
             "index": i,
@@ -487,9 +491,9 @@ async def rerank_papers(
             "authors": p["authors"],
             "journal": p["journal"],
             "year": p["year"],
-            "abstract": (p["abstract"] or "")[:350],
+            "abstract": (p["abstract"] or "")[:200],
         }
-        for i, p in enumerate(papers)
+        for i, p in enumerate(pool)
     ]
 
     prompt = f"""
@@ -509,7 +513,10 @@ async def rerank_papers(
     {{"selected_indices": [lista ordenada de hasta {target} índices de la lista original]}}
     """
     try:
-        raw = await call_gemini(prompt, json_mode=True, temperature=0.1, thinking_budget=0)
+        raw = await asyncio.wait_for(
+            call_gemini(prompt, json_mode=True, temperature=0.1, thinking_budget=0),
+            timeout=90.0
+        )
         cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         selected_indices = json.loads(cleaned).get("selected_indices", [])
 
@@ -517,11 +524,11 @@ async def rerank_papers(
         seen: set = set()
         for idx in selected_indices:
             i = int(idx)
-            if 0 <= i < len(papers) and i not in seen:
-                reranked.append(papers[i])
+            if 0 <= i < len(pool) and i not in seen:
+                reranked.append(pool[i])
                 seen.add(i)
-        # Completar si hacen falta
-        for i, p in enumerate(papers):
+        # Completar si hacen falta con el resto del pool pre-rankeado
+        for i, p in enumerate(pool):
             if len(reranked) >= target:
                 break
             if i not in seen:
@@ -539,7 +546,7 @@ async def rerank_papers(
             f"Re-ranking con Gemini no disponible ({e}). Usando orden por relevancia de búsqueda.",
             "search"
         ))
-        return papers[:target]
+        return pre_ranked[:target]
 
 
 # ---------------------------------------------------------------------------
