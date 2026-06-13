@@ -25,7 +25,8 @@ async def call_gemini(
     temperature: float = 0.2,
     inline_data: Optional[dict] = None,
     thinking_budget: int = 1024,
-    timeout: float = 30.0
+    timeout: float = 30.0,
+    max_output_tokens: Optional[int] = None
 ) -> str:
     """
     Función base asíncrona para realizar llamadas a la API de Google Gemini sin SDKs,
@@ -62,6 +63,12 @@ async def call_gemini(
     # Budget de razonamiento: 0=sin thinking, 1024=mínimo, 8192=normal, -1=ilimitado
     # Valor por defecto 1024: permite algo de razonamiento sin causar demoras de minutos
     contents["generationConfig"]["thinkingConfig"] = {"thinkingBudget": thinking_budget}
+
+    # Límite de tokens de salida. CRÍTICO en Gemini 2.5: el thinkingBudget se descuenta
+    # del presupuesto total, así que generaciones largas (ej. 40-60 diapositivas) necesitan
+    # un máximo alto y explícito para no truncar el JSON a medias y caer en el fallback.
+    if max_output_tokens:
+        contents["generationConfig"]["maxOutputTokens"] = max_output_tokens
 
     if inline_data:
         contents["contents"][0]["parts"].append({

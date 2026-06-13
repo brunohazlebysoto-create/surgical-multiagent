@@ -40,6 +40,182 @@ _SLIDE_TARGETS = {
     "very_detailed": "entre 60 y 80",
 }
 
+
+def _as_list(value) -> List[str]:
+    """Normaliza un campo del meta-análisis (str | list | None) a una lista de strings no vacíos."""
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str) and value.strip() and value.strip().upper() != "N/A":
+        # Partir oraciones largas en viñetas legibles
+        parts = [s.strip() for s in value.replace("•", ".").split(". ") if s.strip()]
+        return parts or [value.strip()]
+    return []
+
+
+def _build_content_slides(
+    query: str,
+    meta_analysis: Dict[str, Any],
+    analyzed_papers: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """
+    Construye una baraja de diapositivas REALES y variadas a partir del contenido del
+    meta-análisis y los papers analizados. Se usa cuando Gemini falla o devuelve muy
+    pocas diapositivas, para que la presentación de respaldo sea del TEMA y no genérica.
+    """
+    topic = query.strip().capitalize()
+    slides: List[Dict[str, Any]] = [
+        {
+            "layout": "title",
+            "title": f"Cirugía Infantil: {topic}",
+            "subtitle": "Síntesis de Evidencia Científica · Meta-análisis GRADE",
+            "references": "Cuerpo de Evidencia Analizado",
+            "speaker_notes": f"Bienvenidos. Presentamos la síntesis de evidencia sobre {topic} basada en {len(analyzed_papers)} estudios analizados."
+        },
+        {
+            "layout": "bullet_points",
+            "title": "Objetivos de la Presentación",
+            "bullets": [
+                f"Sintetizar la evidencia científica actual sobre {topic} en cirugía pediátrica.",
+                "Comparar las técnicas quirúrgicas disponibles y sus desenlaces clínicos.",
+                "Establecer recomendaciones prácticas según el nivel de evidencia GRADE.",
+                "Identificar brechas de conocimiento y controversias vigentes.",
+            ],
+            "references": "Cuerpo de Evidencia Analizado",
+            "speaker_notes": f"Estos son los objetivos académicos y clínicos para el abordaje de {topic}."
+        },
+    ]
+
+    # Nivel de evidencia y recomendación GRADE
+    grade = str(meta_analysis.get("grade_recommendation") or "").strip()
+    level = str(meta_analysis.get("global_evidence_level") or "").strip()
+    if grade or level:
+        slides.append({
+            "layout": "metrics",
+            "title": "Nivel de Evidencia y Recomendación GRADE",
+            "metric_value": grade.split("-")[0].strip()[:18] if grade else "GRADE",
+            "metric_label": f"{level}. {grade}".strip(". "),
+            "references": "Síntesis GRADE del corpus",
+            "speaker_notes": "La recomendación GRADE resume la certeza global de la evidencia para esta patología."
+        })
+
+    # Hallazgos comparativos
+    comp = _as_list(meta_analysis.get("comparison_findings"))
+    if comp:
+        slides.append({
+            "layout": "bullet_points",
+            "title": "Hallazgos Comparativos entre Técnicas",
+            "bullets": comp[:5],
+            "references": "Comparación del corpus de estudios",
+            "speaker_notes": "Aquí se comparan los desenlaces clínicos clave entre las técnicas evaluadas."
+        })
+
+    # Hechos numéricos verificados (cifras reales del corpus)
+    num_facts = meta_analysis.get("numerical_facts") or []
+    fact_bullets = []
+    for f in num_facts:
+        if isinstance(f, dict):
+            fact = str(f.get("fact") or "").strip()
+            val = str(f.get("value") or "").strip()
+            cite = str(f.get("citation") or "").strip()
+            line = " ".join(x for x in [fact, f"({val})" if val and val not in fact else "", f"— {cite}" if cite else ""] if x).strip()
+            if line:
+                fact_bullets.append(line)
+        elif str(f).strip():
+            fact_bullets.append(str(f).strip())
+    # Repartir las cifras en diapositivas de máximo 5 viñetas
+    for i in range(0, len(fact_bullets), 5):
+        chunk = fact_bullets[i:i + 5]
+        if chunk:
+            slides.append({
+                "layout": "bullet_points",
+                "title": "Cifras Clave de la Evidencia" + (f" (cont. {i // 5 + 1})" if i else ""),
+                "bullets": chunk,
+                "references": "Datos extraídos del corpus",
+                "speaker_notes": "Estas son las cifras clínicas concretas extraídas directamente de los estudios."
+            })
+
+    # Implicaciones clínicas
+    impl = _as_list(meta_analysis.get("clinical_implications"))
+    if impl:
+        slides.append({
+            "layout": "bullet_points",
+            "title": "Implicaciones Clínicas y Recomendaciones",
+            "bullets": impl[:5],
+            "references": "Síntesis del corpus",
+            "speaker_notes": "Recomendaciones prácticas derivadas de la evidencia para la toma de decisiones."
+        })
+
+    # Brechas de conocimiento
+    gaps = _as_list(meta_analysis.get("knowledge_gaps"))
+    if gaps:
+        slides.append({
+            "layout": "bullet_points",
+            "title": "Brechas de Conocimiento",
+            "bullets": gaps[:5],
+            "references": "Análisis de limitaciones del corpus",
+            "speaker_notes": "Identificamos las áreas donde la evidencia actual es insuficiente."
+        })
+
+    # Controversias
+    contr = _as_list(meta_analysis.get("controversies"))
+    if contr:
+        slides.append({
+            "layout": "bullet_points",
+            "title": "Controversias Actuales",
+            "bullets": contr[:5],
+            "references": "Estudios en conflicto del corpus",
+            "speaker_notes": "Estas son las controversias activas en la literatura sobre el tema."
+        })
+
+    # Forest plot si hay datos
+    if (meta_analysis.get("forest_plot_data") or []):
+        slides.append({
+            "layout": "forest_plot",
+            "title": "Análisis del Forest Plot de Eficacia",
+            "bullets": [
+                "El gráfico muestra los Odds Ratio (OR) e intervalos de confianza de cada estudio.",
+                "El rombo inferior representa el estimado global ponderado (pool).",
+                "Valores de OR < 1 favorecen la técnica de intervención.",
+            ],
+            "references": "Meta-análisis del corpus",
+            "speaker_notes": "El forest plot integra visualmente la magnitud del efecto de cada estudio."
+        })
+
+    # Tabla de evidencia con los papers reales
+    rows = []
+    for p in analyzed_papers[:6]:
+        authors_raw = p.get("authors", "N/A")
+        first_author = authors_raw.split(",")[0].strip()
+        cite = f"{first_author} et al. ({p.get('year', 's.f.')})" if "," in authors_raw else f"{first_author} ({p.get('year', 's.f.')})"
+        rows.append([
+            cite,
+            str(p.get("study_type", "N/A"))[:28],
+            str(p.get("picos", {}).get("O", "N/A"))[:60],
+        ])
+    if rows:
+        slides.append({
+            "layout": "comparison_table",
+            "title": "Tabla de Evidencia Científica",
+            "headers": ["Estudio", "Tipo", "Hallazgo Principal"],
+            "rows": rows,
+            "references": "Corpus de estudios analizados",
+            "speaker_notes": "Esta tabla resume los estudios clave que sustentan la presentación."
+        })
+
+    # Conclusiones
+    slides.append({
+        "layout": "bullet_points",
+        "title": "Conclusiones",
+        "bullets": [
+            f"La evidencia sobre {topic} respalda una recomendación {grade or 'según el nivel GRADE evaluado'}.",
+            comp[0] if comp else "Las técnicas evaluadas presentan perfiles de desenlace diferenciados.",
+            impl[0] if impl else "Se recomienda individualizar la decisión según el paciente y el centro.",
+        ],
+        "references": "Síntesis global del corpus",
+        "speaker_notes": "Cerramos resumiendo los mensajes clave y la recomendación final."
+    })
+    return slides
+
 async def run_presenter_panel(
     meta_analysis: Dict[str, Any],
     analyzed_papers: List[Dict[str, Any]],
@@ -177,62 +353,26 @@ async def run_presenter_panel(
     """
     
     try:
-        response_json_text = await call_gemini(prompt_pptx_json, json_mode=True, temperature=0.2, thinking_budget=4096)
+        response_json_text = await call_gemini(
+            prompt_pptx_json, json_mode=True, temperature=0.3,
+            thinking_budget=2048, timeout=240.0, max_output_tokens=32768
+        )
         data = json.loads(response_json_text)
         slides_list = data.get("slides", [])
-        
-        # Validación de que al menos tenemos 40+ slides
-        if len(slides_list) < 40:
-            logger.warning(f"Gemini generó menos de 40 slides ({len(slides_list)}). Rellenando hasta 40.")
-            while len(slides_list) < 40:
-                slides_list.append({
-                    "layout": "bullet_points",
-                    "title": f"Aspectos Clínicos Adicionales - Parte {len(slides_list) - 18}",
-                    "bullets": [
-                        "Optimización de la curva de aprendizaje en residentes quirúrgicos.",
-                        "Revisión de guías internacionales actualizadas y protocolos ERAS.",
-                        "Enfoque multidisciplinario que incluye neonatología, anestesiología y cirugía pediátrica."
-                    ],
-                    "references": "Consenso de Expertos / Evidencia General",
-                    "speaker_notes": "En esta diapositiva abordamos aspectos clínicos y educativos adicionales para la mejora de la curva de aprendizaje."
-                })
+
+        # Si Gemini devolvió muy pocas diapositivas, completar con contenido REAL
+        # derivado del meta-análisis (nunca con placeholders idénticos).
+        if len(slides_list) < 12:
+            logger.warning(f"Gemini generó solo {len(slides_list)} slides. Complementando con contenido del meta-análisis.")
+            content_slides = _build_content_slides(query, meta_analysis, analyzed_papers)
+            # Evitar duplicar la portada si Gemini ya generó una
+            if slides_list and slides_list[0].get("layout") == "title":
+                content_slides = [s for s in content_slides if s.get("layout") != "title"]
+            slides_list.extend(content_slides)
     except Exception as e:
-        logger.error(f"Error generating or parsing PPTX JSON: {e}. Usando fallback de slides.")
-        # Fallback estructural seguro
-        slides_list = [
-            {
-                "layout": "title",
-                "title": f"Cirugía Infantil: {query.capitalize()}",
-                "subtitle": "Análisis de Evidencia Científica Multi-Agente",
-                "references": "Consenso de Expertos / Evidencia General",
-                "speaker_notes": "Bienvenidos a la presentación. Discutiremos los resultados del meta-análisis de evidencia científica."
-            },
-            {
-                "layout": "bullet_points",
-                "title": "Objetivos del Consenso Quirúrgico",
-                "bullets": [
-                    "Analizar la evidencia clínica actual de múltiples papers indexados y registros.",
-                    "Discutir los aspectos de técnica quirúrgica, anestesia pediátrica y dosificación.",
-                    "Sintetizar las dosis y pautas farmacológicas seguras por peso corporal (mg/kg).",
-                    "Identificar brechas de conocimiento, complicaciones comunes y controversias clínicas."
-                ],
-                "references": "Consenso de Expertos / Evidencia General",
-                "speaker_notes": "Los objetivos de esta presentación se centran en analizar la evidencia disponible para optimizar los tratamientos."
-            }
-        ]
-        # Completar a 40 slides por seguridad de fallback
-        while len(slides_list) < 40:
-            slides_list.append({
-                "layout": "bullet_points",
-                "title": f"Diapositiva de Soporte Clínico {len(slides_list) + 1}",
-                "bullets": [
-                    "Revisión de la literatura científica actual y comparación de técnicas quirúrgicas.",
-                    "Estrategia de dosificación en mg/kg en anestesia y analgesia postoperatoria.",
-                    "Seguimiento y criterios de alta segura para pacientes pediátricos."
-                ],
-                "references": "Cuerpo de Evidencia / Fallback Local",
-                "speaker_notes": f"En esta diapositiva revisamos el soporte clínico detallado número {len(slides_list) + 1}."
-            })
+        logger.error(f"Error generating or parsing PPTX JSON: {e}. Usando deck derivado del meta-análisis.")
+        # Fallback del TEMA: baraja construida con los datos reales del meta-análisis y los papers.
+        slides_list = _build_content_slides(query, meta_analysis, analyzed_papers)
 
     await event_queue.put(programador.format_log(f"¡Esquema de diapositivas consolidado en JSON ({len(slides_list)} diapositivas detalladas) con éxito! Enviando el esquema estructurado final al **Sistema de Compilación** para renderizar los entregables .docx y .pptx.", "present"))
     
