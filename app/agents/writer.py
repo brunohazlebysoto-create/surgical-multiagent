@@ -231,8 +231,8 @@ async def generate_document_chunk(
     }
 
     return await call_gemini(
-        prompts[chunk_id], temperature=0.25, thinking_budget=4096,
-        timeout=150.0, max_output_tokens=12288
+        prompts[chunk_id], temperature=0.25, thinking_budget=8192,
+        timeout=180.0, max_output_tokens=16384
     )
 
 

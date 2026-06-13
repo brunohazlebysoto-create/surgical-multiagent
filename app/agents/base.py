@@ -88,17 +88,22 @@ async def call_gemini(
     # Pacing de UI y Rate Limit: Pausa estratégica para regular la tasa antes de la llamada
     await asyncio.sleep(GEMINI_PAUSE_SECONDS)
 
-    # Reintentos totales: cada clave puede intentarse hasta 3 veces
-    max_attempts = num_keys * 3
-    backoff = 3.0  # Backoff de seguridad si todas las claves fallan consecutivamente
+    # Estrategia de reintentos diferenciada:
+    #   - 429 (quota): rotar clave y reintentar hasta num_keys * 3 veces — las claves pueden
+    #     recuperarse y hay múltiples claves disponibles.
+    #   - Timeout / error de red: fallar RÁPIDO. Un timeout significa que la API no respondió
+    #     en el tiempo acordado; reintentar num_keys*3 veces × timeout = cuelgue de minutos.
+    #     Aquí solo reintentamos 1 vez por clave y luego abandonamos.
+    max_quota_attempts = num_keys * 3   # para 429s: probar todas las claves varias veces
+    max_timeout_failures = num_keys     # para timeouts: probar cada clave una sola vez
+    backoff = 3.0
+    consecutive_timeout_failures = 0
 
     async with _api_semaphore:
-        for attempt in range(max_attempts):
-            # Obtener el índice actual de la llave (siempre con módulo para evitar IndexError)
+        for attempt in range(max_quota_attempts):
             key_idx = _current_key_idx % num_keys
             api_key = keys_to_use[key_idx]
 
-            # Si es un placeholder, rotarla inmediatamente y continuar
             if not api_key or "Placeholder" in api_key or api_key.startswith("KEY"):
                 logger.warning(f"Llave Gemini en el índice {key_idx} es un placeholder o está vacía. Rotando al instante...")
                 _current_key_idx = (_current_key_idx + 1) % num_keys
@@ -110,56 +115,62 @@ async def call_gemini(
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     response = await client.post(url, json=contents)
 
-                    if response.status_code == 429:
-                        logger.warning(
-                            f"Límite de cuota (429) alcanzado para la llave {key_idx}. "
-                            f"Rotando al instante a la siguiente clave... (Intento {attempt + 1}/{max_attempts})"
-                        )
-                        _current_key_idx = (_current_key_idx + 1) % num_keys
-                        if (attempt + 1) % num_keys == 0:
-                            logger.info(f"Se probó el carrusel completo de {num_keys} llaves. Esperando {backoff}s antes de reintentar...")
-                            await asyncio.sleep(backoff)
-                            backoff *= 1.5
+                if response.status_code == 429:
+                    logger.warning(
+                        f"Límite de cuota (429) para llave {key_idx}. "
+                        f"Rotando... (Intento {attempt + 1}/{max_quota_attempts})"
+                    )
+                    consecutive_timeout_failures = 0  # 429 ≠ timeout, resetear contador
+                    _current_key_idx = (_current_key_idx + 1) % num_keys
+                    if (attempt + 1) % num_keys == 0:
+                        logger.info(f"Carrusel completo de {num_keys} llaves. Esperando {backoff}s...")
+                        await asyncio.sleep(backoff)
+                        backoff *= 1.5
+                    continue
+
+                response.raise_for_status()
+                consecutive_timeout_failures = 0  # éxito: resetear
+
+                data = response.json()
+                try:
+                    text_response = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                except (KeyError, IndexError) as err:
+                    logger.error(f"Estructura de respuesta inesperada: {data}. Error: {err}")
+                    return '{"error": "Respuesta vacía o incorrecta"}' if json_mode else "Error: respuesta de API inválida."
+
+                if json_mode:
+                    try:
+                        import json as _json
+                        cleaned = text_response.lstrip("```json").lstrip("```").rstrip("```").strip()
+                        _json.loads(cleaned)
+                        return cleaned
+                    except (_json.JSONDecodeError, ValueError):
+                        logger.warning(f"JSON inválido en intento {attempt + 1}. Reintentando...")
                         continue
 
-                    response.raise_for_status()
-
-                    data = response.json()
-                    try:
-                        text_response = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                    except (KeyError, IndexError) as err:
-                        logger.error(f"Estructura de respuesta inesperada de Gemini API: {data}. Error: {err}")
-                        return '{"error": "Respuesta vacía o incorrecta"}' if json_mode else "Error: Estructura de respuesta de API inválida."
-
-                    # Validar JSON si se pidió json_mode — reintentar si es inválido
-                    if json_mode:
-                        try:
-                            import json as _json
-                            cleaned = text_response.lstrip("```json").lstrip("```").rstrip("```").strip()
-                            _json.loads(cleaned)
-                            return cleaned
-                        except (_json.JSONDecodeError, ValueError):
-                            logger.warning(f"Gemini devolvió JSON inválido en intento {attempt + 1}. Reintentando...")
-                            # No rotar clave, solo reintentar con la misma
-                            continue
-
-                    return text_response
+                return text_response
 
             except httpx.HTTPStatusError as e:
-                logger.error(f"Error HTTP de API Gemini (Intento {attempt + 1}, Llave {key_idx}): {e.response.status_code} - {e.response.text}")
+                logger.error(f"Error HTTP (Intento {attempt + 1}, Llave {key_idx}): {e.response.status_code}")
+                consecutive_timeout_failures += 1
                 _current_key_idx = (_current_key_idx + 1) % num_keys
+                if consecutive_timeout_failures >= max_timeout_failures:
+                    raise Exception(f"Todas las claves devolvieron errores HTTP. Último: {e.response.status_code}")
                 if (attempt + 1) % num_keys == 0:
                     await asyncio.sleep(backoff)
                     backoff *= 1.5
 
             except httpx.RequestError as e:
-                logger.error(f"Error de red al conectar con Gemini API (Intento {attempt + 1}, Llave {key_idx}): {e}")
+                # Timeout, DNS, conexión rechazada — fallar rápido
+                consecutive_timeout_failures += 1
+                logger.error(f"Error de red/timeout (Intento {attempt + 1}, Llave {key_idx}): {type(e).__name__}")
                 _current_key_idx = (_current_key_idx + 1) % num_keys
-                if (attempt + 1) % num_keys == 0:
-                    await asyncio.sleep(backoff)
-                    backoff *= 1.5
+                if consecutive_timeout_failures >= max_timeout_failures:
+                    raise Exception(f"Timeout o error de red en todas las claves ({max_timeout_failures} intentos). Verifica conectividad y cuota.")
+                # Pausa breve antes de intentar la siguiente clave
+                await asyncio.sleep(1.0)
 
-        raise Exception("Se agotaron todos los reintentos y llaves configuradas para la API de Gemini.")
+        raise Exception("Se agotaron todos los reintentos para la API de Gemini.")
 
 
 class BaseAgent:
