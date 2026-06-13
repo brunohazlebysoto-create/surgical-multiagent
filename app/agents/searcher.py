@@ -550,6 +550,117 @@ async def rerank_papers(
 
 
 # ---------------------------------------------------------------------------
+# Guideline-specific search (PubMed filter: Practice Guideline publication type)
+# ---------------------------------------------------------------------------
+
+async def query_guidelines(search_term: str) -> List[Dict[str, Any]]:
+    """
+    Búsqueda dedicada de guías clínicas y consensos en PubMed usando el filtro
+    de tipo de publicación [ptyp] Practice Guideline / Clinical Guideline / Consensus.
+    Devuelve hasta 10 artículos para garantizar lineamientos en el corpus.
+    """
+    guideline_filter = (
+        f"({search_term}) AND "
+        "(Practice Guideline[ptyp] OR Clinical Guideline[ptyp] OR "
+        "Consensus Development Conference[ptyp] OR Guideline[ptyp]) "
+        "AND humans[MeSH Terms]"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.get(
+                "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+                params={"db": "pubmed", "term": guideline_filter,
+                        "retmode": "json", "retmax": "10", "sort": "relevance"}
+            )
+            res.raise_for_status()
+            id_list = res.json().get("esearchresult", {}).get("idlist", [])
+
+        if not id_list:
+            # Fallback: buscar sin filtro de población
+            base_filter = (
+                f"({search_term}) AND "
+                "(Practice Guideline[ptyp] OR Clinical Guideline[ptyp] OR Guideline[ptyp])"
+            )
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.get(
+                    "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+                    params={"db": "pubmed", "term": base_filter,
+                            "retmode": "json", "retmax": "10", "sort": "relevance"}
+                )
+                res.raise_for_status()
+                id_list = res.json().get("esearchresult", {}).get("idlist", [])
+
+        if not id_list:
+            return []
+
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            res_xml = await client.get(
+                "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+                params={"db": "pubmed", "id": ",".join(id_list),
+                        "retmode": "xml", "rettype": "abstract"}
+            )
+            res_xml.raise_for_status()
+
+        root = ET.fromstring(res_xml.text)
+        papers: List[Dict[str, Any]] = []
+        for article_node in root.findall(".//PubmedArticle"):
+            try:
+                pmid = article_node.findtext(".//PMID") or ""
+                title = article_node.findtext(".//ArticleTitle") or ""
+                title = re.sub(r"<[^>]+>", "", title).strip()
+                if not title:
+                    continue
+                abstract_parts = []
+                for at in article_node.findall(".//AbstractText"):
+                    label = at.get("Label", "")
+                    tc = (at.text or "").strip()
+                    if tc:
+                        abstract_parts.append(f"{label}: {tc}" if label else tc)
+                abstract = " ".join(abstract_parts)
+                authors_list = []
+                for author in article_node.findall(".//Author"):
+                    last = author.findtext("LastName") or ""
+                    initials = author.findtext("Initials") or ""
+                    if last:
+                        authors_list.append(f"{last} {initials}".strip())
+                authors_str = ", ".join(authors_list[:3])
+                if len(authors_list) > 3:
+                    authors_str += " et al."
+                journal = (
+                    article_node.findtext(".//Journal/Title")
+                    or article_node.findtext(".//ISOAbbreviation")
+                    or "PubMed"
+                )
+                year_str = (
+                    article_node.findtext(".//PubDate/Year")
+                    or (article_node.findtext(".//PubDate/MedlineDate") or "")[:4]
+                    or "2024"
+                )
+                try:
+                    year = int(year_str)
+                except ValueError:
+                    year = 2024
+                doi = ""
+                for article_id in article_node.findall(".//ArticleId"):
+                    if article_id.get("IdType") == "doi":
+                        doi = (article_id.text or "").strip()
+                        break
+                if not doi:
+                    doi = f"pubmed_{pmid}"
+                papers.append({
+                    "title": title, "authors": authors_str, "journal": journal,
+                    "year": year, "doi": doi, "abstract": abstract,
+                    "is_guideline": True,
+                })
+            except Exception:
+                continue
+        return papers
+    except Exception as e:
+        logger.error(f"query_guidelines falló: {e}")
+        return []
+
+
+# ---------------------------------------------------------------------------
 # Search Panel (Paso 1)
 # ---------------------------------------------------------------------------
 
@@ -683,11 +794,43 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
         "search"
     ))
 
-    filtered_primary = await _run_apis(search_term_api)
-    logger.info(f"Resultados primarios tras filtrado y deduplicación: {len(filtered_primary)}")
+    # Búsqueda primaria + guías en paralelo
+    filtered_primary, guideline_papers = await asyncio.gather(
+        _run_apis(search_term_api),
+        query_guidelines(search_term_api),
+        return_exceptions=True
+    )
+    if isinstance(filtered_primary, Exception):
+        logger.error(f"_run_apis falló: {filtered_primary}")
+        filtered_primary = []
+    if isinstance(guideline_papers, Exception):
+        logger.error(f"query_guidelines falló: {guideline_papers}")
+        guideline_papers = []
+
+    if guideline_papers:
+        await event_queue.put(critico.format_log(
+            f"**Guías clínicas encontradas**: {len(guideline_papers)} guías y consensos recuperados "
+            f"directamente de PubMed (filtro `Practice Guideline[ptyp]`). "
+            f"Se incorporan como evidencia de alta prioridad para los lineamientos del documento.",
+            "search"
+        ))
+
+    logger.info(f"Resultados primarios: {len(filtered_primary)} | Guías: {len(guideline_papers)}")
+
+    # ── Merge de guías en el pool (sin duplicar) ─────────────────────────
+    all_candidates = list(filtered_primary)
+    existing_dois = {(p.get("doi") or "").lower() for p in all_candidates}
+    existing_titles = {(p.get("title") or "").lower()[:50] for p in all_candidates}
+    for gp in (guideline_papers or []):
+        doi_key = (gp.get("doi") or "").lower()
+        title_key = (gp.get("title") or "").lower()[:50]
+        if doi_key not in existing_dois and title_key not in existing_titles:
+            all_candidates.append(gp)
+            if doi_key:
+                existing_dois.add(doi_key)
+            existing_titles.add(title_key)
 
     # ── SEGUNDA BÚSQUEDA si los resultados son escasos (<10) ─────────────
-    all_candidates = filtered_primary
     if len(filtered_primary) < 10 and search_term_broad:
         broad_api = search_term_broad if any(kw in search_term_broad.lower() for kw in pediatric_keywords) \
                     else f"{search_term_broad} pediatric"

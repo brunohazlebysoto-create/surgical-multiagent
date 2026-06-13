@@ -91,6 +91,15 @@ async def run_meta_analyst_panel(
        - "knowledge_gaps": Lista de brechas de conocimiento con el estudio que las identifica.
        - "controversies": Lista de controversias citando los estudios en conflicto.
        - "clinical_implications": Recomendaciones prácticas citando la evidencia de respaldo.
+       - "evidence_range_years": Objeto con "min" y "max" (enteros) del rango de años de los estudios.
+       - "numerical_facts": Lista de objetos {{
+           "fact": "descripción de la cifra clínica concreta (ej. 'Tasa de complicaciones LP: 8.3%')",
+           "value": "valor exacto con unidades",
+           "citation": "Apellido et al. (Año)"
+         }} — extrae TODAS las cifras numéricas concretas que aparezcan en los abstracts del corpus
+         (porcentajes, tiempos, OR, RR, n de muestra, tasas, dosis). Mínimo 8 hechos si el corpus lo permite.
+         Estos hechos son la única fuente autorizada de cifras para el redactor y deben extraerse
+         literalmente del corpus, NO fabricados.
 
     Devuelve un JSON exacto con las claves raíz: "synthesizer_log", "bias_opponent_log", "meta_analysis".
     """
@@ -104,23 +113,39 @@ async def run_meta_analyst_panel(
         final_meta = data.get("meta_analysis", {})
         
         # Validar claves mínimas del meta_analysis
-        required_keys = ["global_evidence_level", "grade_recommendation", "comparison_findings", "knowledge_gaps", "controversies", "clinical_implications"]
+        required_keys = [
+            "global_evidence_level", "grade_recommendation", "comparison_findings",
+            "knowledge_gaps", "controversies", "clinical_implications",
+            "evidence_range_years", "numerical_facts"
+        ]
         for rk in required_keys:
             if rk not in final_meta:
-                final_meta[rk] = "N/A"
+                final_meta[rk] = [] if rk in ("knowledge_gaps", "controversies", "numerical_facts") else "N/A"
+        if not isinstance(final_meta.get("evidence_range_years"), dict):
+            years = [p.get("year") for p in analyzed_papers if isinstance(p.get("year"), int)]
+            final_meta["evidence_range_years"] = {
+                "min": min(years) if years else 2000,
+                "max": max(years) if years else 2024
+            }
                 
     except Exception as e:
         logger.error(f"Error consolidando meta-análisis: {e}")
         # Fallback seguro
         synth_msg = f"Revisando los {len(analyzed_papers)} estudios. El enfoque analítico muestra una gran heterogeneidad."
         bias_msg = "Revisión de sesgos completada. Es necesario reportar de forma transparente las limitaciones metodológicas."
+        years = [p.get("year") for p in analyzed_papers if isinstance(p.get("year"), int)]
         final_meta = {
             "global_evidence_level": "Nivel 2b - Basado en estudios de cohortes y ECAs heterogéneos.",
             "grade_recommendation": "Grado B - Recomendación moderada para el enfoque de elección.",
             "comparison_findings": "Las técnicas comparadas muestran resultados quirúrgicos similares en la muestra analizada.",
             "knowledge_gaps": ["Falta de seguimiento prospectivo a largo plazo (>5 años)"],
             "controversies": ["La curva de aprendizaje y costes del cirujano"],
-            "clinical_implications": "Se recomienda personalizar la decisión según la anatomía del paciente y experiencia del centro."
+            "clinical_implications": "Se recomienda personalizar la decisión según la anatomía del paciente y experiencia del centro.",
+            "evidence_range_years": {
+                "min": min(years) if years else 2000,
+                "max": max(years) if years else 2024
+            },
+            "numerical_facts": []
         }
         
     # Enviar mensajes del debate a la cola de logs

@@ -95,6 +95,32 @@ async def generate_document_chunk(
     """
     wt = _DETAIL_WORD_TARGETS.get(detail_level, _DETAIL_WORD_TARGETS["long"])
 
+    # Contexto de grounding: hechos numéricos extraídos directamente del corpus
+    numerical_facts = meta_analysis.get("numerical_facts") or []
+    evidence_range = meta_analysis.get("evidence_range_years") or {}
+    ev_min = evidence_range.get("min", "")
+    ev_max = evidence_range.get("max", "")
+    evidence_currency = (
+        f"La evidencia disponible abarca publicaciones de {ev_min} a {ev_max}."
+        if ev_min and ev_max else ""
+    )
+
+    if numerical_facts:
+        import json as _json
+        facts_str = "\n".join(
+            f"  - {f.get('fact', '')}: {f.get('value', '')} ({f.get('citation', '')})"
+            for f in numerical_facts
+        )
+        grounding_block = f"""
+        HECHOS NUMÉRICOS VERIFICADOS DEL CORPUS (úsalos textualmente — NO los inventes):
+        {facts_str}
+        {evidence_currency}
+        ADVERTENCIA: Si un dato numérico NO aparece en esta lista ni en la Lista de referencias,
+        NO lo incluyas en el texto. Indica la ausencia de dato en cambio de inventarlo.
+        """
+    else:
+        grounding_block = f"\n        {evidence_currency}\n" if evidence_currency else ""
+
     citation_rule = """
         REGLA DE CITACIÓN OBLIGATORIA: Toda afirmación clínica, estadística, técnica o diagnóstica
         DEBE ir acompañada de una cita explícita en el texto con el formato (Apellido et al., Año)
@@ -105,7 +131,8 @@ async def generate_document_chunk(
     prompts = {
         1: f"""
         Eres un Redactor Médico especializado en cirugía pediátrica.
-        Escribe un manuscrito extremadamente detallado para las siguientes secciones del tema "{query}":
+        Escribe un manuscrito extremadamente detallado para las siguientes secciones del tema "{query}".
+        {grounding_block}
 
         SECCIÓN 1: Introducción, Caso Clínico de Gancho y Epidemiología
         - Inicia OBLIGATORIAMENTE con un Caso Clínico Simulado (Clinical Case Vignette) detallado
@@ -131,7 +158,8 @@ async def generate_document_chunk(
 
         2: f"""
         Eres un Redactor Médico especializado en cirugía pediátrica.
-        Escribe un manuscrito extremadamente detallado para las siguientes secciones del tema "{query}":
+        Escribe un manuscrito extremadamente detallado para las siguientes secciones del tema "{query}".
+        {grounding_block}
 
         SECCIÓN 3: Manifestaciones Clínicas por Grupo Etario
         - Cómo varían síntomas según edad (neonato, lactante, preescolar, escolar, adolescente).
@@ -159,7 +187,8 @@ async def generate_document_chunk(
 
         3: f"""
         Eres un Redactor Médico especializado en cirugía pediátrica.
-        Escribe un manuscrito extremadamente detallado para las siguientes secciones del tema "{query}":
+        Escribe un manuscrito extremadamente detallado para las siguientes secciones del tema "{query}".
+        {grounding_block}
 
         SECCIÓN 5: Tratamiento
         - Preparación preoperatoria: Holliday-Segar (4-2-1), reposición de pérdidas, corrección
@@ -193,7 +222,8 @@ async def generate_document_chunk(
         {inject_context}
 
         Eres un Redactor Médico especializado en cirugía pediátrica.
-        Escribe ÚNICAMENTE las siguientes secciones del tema "{query}":
+        Escribe ÚNICAMENTE las siguientes secciones del tema "{query}".
+        {grounding_block}
 
         SECCIÓN 7: Síntesis de Evidencia
         - Resumen cruzado comparando las técnicas o estrategias según los estudios analizados.
