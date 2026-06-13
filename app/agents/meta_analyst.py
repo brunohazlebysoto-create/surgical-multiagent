@@ -53,7 +53,7 @@ async def run_meta_analyst_panel(
     for i, p in enumerate(analyzed_papers):
         abstract_excerpt = (p.get("abstract") or "").strip()
         abstract_line = (
-            f"\n        Extracto del abstract: {abstract_excerpt[:300]}"
+            f"\n        Extracto: {abstract_excerpt[:150]}"
             if abstract_excerpt else ""
         )
         corpus_str += f"""
@@ -129,7 +129,7 @@ async def run_meta_analyst_panel(
     """
     
     try:
-        response_text = await call_gemini(prompt_consolidated, json_mode=True, temperature=0.2, thinking_budget=8192)
+        response_text = await call_gemini(prompt_consolidated, json_mode=True, temperature=0.2, thinking_budget=4096, timeout=180.0)
         data = json.loads(response_text)
         
         synth_msg = data.get("synthesizer_log", "Síntesis preliminar iniciada.")
