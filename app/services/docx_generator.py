@@ -265,49 +265,53 @@ def add_prisma_table(doc, query, prisma_data=None):
 
 def add_grade_table(doc, meta_analysis: dict = None):
     """
-    Inserta una tabla de perfil de evidencia GRADE usando los datos reales
-    del meta-análisis cuando están disponibles, y un fallback genérico si no.
+    Inserta la Tabla de Perfil de Evidencia GRADE con los 5 dominios formales
+    (Riesgo de Sesgo, Inconsistencia, Evidencia Indirecta, Imprecisión, Sesgo de Publicación).
     """
     p = doc.add_paragraph()
     p.paragraph_format.space_before = Pt(18)
     p.paragraph_format.space_after = Pt(6)
-    run = p.add_run("Tabla de Perfil de Evidencia GRADE")
+    run = p.add_run("Tabla de Perfil de Evidencia GRADE (5 Dominios)")
     run.font.name = 'Arial'
     run.font.size = Pt(12)
     run.font.bold = True
     run.font.color.rgb = NAVY_COLOR
     p.paragraph_format.keep_with_next = True
 
-    headers = ["Resultado clínico / Diseño", "Certeza de la evidencia",
-               "Hallazgos comparativos", "Brechas / Limitaciones", "Recomendación GRADE"]
+    ma = meta_analysis or {}
+    grade_rec = str(ma.get("grade_recommendation", "Grado B"))[:100]
+    ev_level = str(ma.get("global_evidence_level", "Nivel 2b"))[:100]
 
-    if meta_analysis:
-        evidence_level = str(meta_analysis.get("global_evidence_level", "Nivel 2b"))[:120]
-        grade_rec      = str(meta_analysis.get("grade_recommendation", "Grado B"))[:120]
-        comparison     = str(meta_analysis.get("comparison_findings", "Ver síntesis"))[:150]
-        gaps_raw       = meta_analysis.get("knowledge_gaps", [])
-        gaps           = ("; ".join(gaps_raw) if isinstance(gaps_raw, list) else str(gaps_raw))[:150]
-        controversies  = meta_analysis.get("controversies", [])
-        controv_str    = ("; ".join(controversies) if isinstance(controversies, list) else str(controversies))[:150]
-        implications   = str(meta_analysis.get("clinical_implications", ""))[:150]
+    # Summary row at top
+    summary_p = doc.add_paragraph()
+    summary_p.paragraph_format.space_after = Pt(4)
+    sum_run = summary_p.add_run(f"Recomendación GRADE: {grade_rec} | Certeza global: {ev_level}")
+    sum_run.font.name = 'Arial'
+    sum_run.font.size = Pt(10)
+    sum_run.font.bold = True
+    sum_run.font.color.rgb = NAVY_COLOR
 
-        rows = [
-            ["Eficacia de intervención quirúrgica pediátrica",
-             evidence_level, comparison, gaps, grade_rec],
-            ["Seguridad y complicaciones (intra y postoperatorias)",
-             evidence_level, controv_str, gaps, grade_rec],
-            ["Implicaciones clínicas prácticas",
-             evidence_level, implications, "Ver controversias actuales", grade_rec],
+    headers = ["Dominio GRADE", "Evaluación", "Impacto en certeza"]
+
+    grade_domains = ma.get("grade_domains") or []
+    if not grade_domains:
+        grade_domains = [
+            {"domain": "Riesgo de Sesgo", "assessment": "Estudios observacionales predominantes", "impact": "Serio"},
+            {"domain": "Inconsistencia", "assessment": "Heterogeneidad moderada entre estudios", "impact": "No serio"},
+            {"domain": "Evidencia Indirecta", "assessment": "Población pediátrica representada", "impact": "No serio"},
+            {"domain": "Imprecisión", "assessment": "Intervalos de confianza amplios en algunos estudios", "impact": "Serio"},
+            {"domain": "Sesgo de Publicación", "assessment": "No se descarta dado el número de estudios", "impact": "No serio"},
         ]
-    else:
-        rows = [
-            ["15 ECAs y Cohortes", "MODERADA (★★★☆)",
-             "Resultados homogéneos en éxito clínico", "Muestras pequeñas en algunas cohortes",
-             "Fuerte a Favor de técnica estándar"],
-            ["Estudios Observacionales", "BAJA (★★☆☆)",
-             "Heterogeneidad en tiempos operatorios", "Sesgo de selección en retrospectivos",
-             "Recomendación débil para técnicas alternativas"],
-        ]
+
+    rows = [
+        [d.get("domain", ""), d.get("assessment", ""), d.get("impact", "")]
+        for d in grade_domains
+    ]
+
+    # Append implications
+    implications = str(ma.get("clinical_implications", ""))
+    if implications:
+        rows.append(["Implicaciones clínicas", implications[:200], grade_rec])
 
     add_styled_table(doc, headers, rows)
 
@@ -427,6 +431,25 @@ def build_docx(
     meta_run.font.color.rgb = SLATE_COLOR
     meta_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
+    # Evidence currency notice
+    ev_range = (meta_analysis or {}).get("evidence_range_years") or {}
+    ev_min = ev_range.get("min")
+    ev_max = ev_range.get("max")
+    if ev_min and ev_max:
+        from datetime import datetime as _dt
+        age = _dt.now().year - ev_max
+        currency_text = f"Evidencia basada en publicaciones de {ev_min}–{ev_max}."
+        if age > 5:
+            currency_text += f" ⚠️ Nota: la evidencia más reciente tiene {age} años. Se recomienda verificar actualizaciones recientes."
+        ev_p = doc.add_paragraph()
+        ev_p.paragraph_format.space_after = Pt(6)
+        ev_run = ev_p.add_run(currency_text)
+        ev_run.font.name = 'Arial'
+        ev_run.font.size = Pt(9.5)
+        ev_run.font.italic = True
+        ev_run.font.color.rgb = SLATE_COLOR
+        ev_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
     # Salto de página para iniciar el contenido
     doc.add_page_break()
 

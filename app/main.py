@@ -21,6 +21,7 @@ from app.agents.presenter import run_presenter_panel
 from app.services.docx_generator import build_docx
 from app.services.pptx_generator import build_pptx
 from app.services.document_parser import parse_uploaded_document
+from app.services.fulltext_fetcher import enrich_papers_with_fulltext
 
 # Configurar logs
 logging.basicConfig(level=logging.INFO)
@@ -165,6 +166,26 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
             "content": f"Iniciando Paso 2: Análisis PICO-S con {len(selected_papers)} artículos..."
         })
 
+        # Enriquecimiento automático de texto completo antes del análisis
+        if cfg.get("pmc_download", True):
+            await event_queue.put({
+                "agent": "Sistema", "role": "Enriquecedor",
+                "color": "#f59e0b", "icon": "📄", "stage": "analyze",
+                "content": f"Descargando texto completo de los top artículos seleccionados (máx. 6)..."
+            })
+            try:
+                selected_papers = await asyncio.wait_for(
+                    enrich_papers_with_fulltext(selected_papers, event_queue, run_id=run_id, max_papers=6),
+                    timeout=60.0
+                )
+                await event_queue.put({
+                    "agent": "Sistema", "role": "Enriquecedor",
+                    "color": "#f59e0b", "icon": "📄", "stage": "analyze",
+                    "content": "Enriquecimiento de texto completo completado."
+                })
+            except Exception as e:
+                logger.warning(f"Enriquecimiento de texto completo fallido (no fatal): {e}")
+
         # Paso 2: Panel de Análisis PICO-S (usando solo la selección)
         analyzed_papers = await run_analyzer_panel(selected_papers, event_queue)
 
@@ -217,7 +238,7 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
                 "color": "#a855f7", "icon": "⚙️", "stage": "render",
                 "content": "Renderizando presentación de PowerPoint (.pptx) detallada..."
             })
-            build_pptx(slides, pptx_filepath, run_id=run_id)
+            build_pptx(slides, pptx_filepath, run_id=run_id, meta_analysis=meta_analysis)
             global_runs[run_id]["pptx_path"] = f"/static/downloads/{run_id}/presentacion_profesional.pptx"
         
         # Guardar JSON de Meta-análisis

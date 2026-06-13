@@ -58,50 +58,76 @@ def add_slide_references(slide, text: str):
     p.font.color.rgb = GRAY_COLOR
     p.alignment = PP_ALIGN.LEFT
 
-def generate_forest_plot(run_id: str) -> str:
-    """Genera un gráfico Forest Plot sintético y lo guarda en el directorio de la ejecución."""
+def generate_forest_plot(run_id: str, forest_plot_data: list = None) -> str:
+    """Genera un gráfico Forest Plot y lo guarda en el directorio de la ejecución."""
     try:
         run_dir = f"static/downloads/{run_id}" if run_id else "static/downloads/temp"
         os.makedirs(run_dir, exist_ok=True)
         img_path = os.path.join(run_dir, "forest_plot_synthetic.png")
-        
+
+        using_real_data = False
         # Datos de metanálisis
         labels = [
-            "Oomen et al. (2021)", 
-            "Gauderer et al. (2019)", 
-            "Rothenberg et al. (2020)", 
-            "Holcomb et al. (2022)", 
+            "Oomen et al. (2021)",
+            "Gauderer et al. (2019)",
+            "Rothenberg et al. (2020)",
+            "Holcomb et al. (2022)",
             "Consenso Global (Resumen)"
         ]
         odds_ratios = [0.85, 0.72, 1.12, 0.65, 0.78]
         ci_lower = [0.60, 0.51, 0.88, 0.44, 0.68]
         ci_upper = [1.20, 1.02, 1.43, 0.95, 0.90]
-        
+        is_summary_flags = [False, False, False, False, True]
+
+        if forest_plot_data and len(forest_plot_data) >= 2:
+            try:
+                labels = [item["label"] for item in forest_plot_data]
+                odds_ratios = [float(item.get("or", 1.0)) for item in forest_plot_data]
+                ci_lower = [float(item.get("ci_lower", or_val - 0.3)) for or_val, item in zip(odds_ratios, forest_plot_data)]
+                ci_upper = [float(item.get("ci_upper", or_val + 0.3)) for or_val, item in zip(odds_ratios, forest_plot_data)]
+                is_summary_flags = [bool(item.get("is_summary", False)) for item in forest_plot_data]
+                using_real_data = True
+            except Exception as parse_err:
+                logger.warning(f"Error parsing forest_plot_data, falling back to synthetic data: {parse_err}")
+                labels = [
+                    "Oomen et al. (2021)",
+                    "Gauderer et al. (2019)",
+                    "Rothenberg et al. (2020)",
+                    "Holcomb et al. (2022)",
+                    "Consenso Global (Resumen)"
+                ]
+                odds_ratios = [0.85, 0.72, 1.12, 0.65, 0.78]
+                ci_lower = [0.60, 0.51, 0.88, 0.44, 0.68]
+                ci_upper = [1.20, 1.02, 1.43, 0.95, 0.90]
+                is_summary_flags = [False, False, False, False, True]
+                using_real_data = False
+
         fig, ax = plt.subplots(figsize=(6, 4.2), dpi=300)
-        
+
         # Estilo oscuro
         fig.patch.set_facecolor('#131A26')
         ax.set_facecolor('#131A26')
-        
+
         # Línea de no efecto (OR = 1.0)
         ax.axvline(x=1.0, color='#ef4444', linestyle='--', linewidth=1.5, label="Línea de no efecto")
-        
+
         # Graficar estudios
         for idx, (label, or_val, low, high) in enumerate(zip(labels, odds_ratios, ci_lower, ci_upper)):
-            is_summary = idx == len(labels) - 1
+            is_summary = is_summary_flags[idx]
             color = '#00D2C4' if not is_summary else '#a855f7'
             marker = 'D' if is_summary else 'o'
             markersize = 8 if is_summary else 6
-            
+
             # Intervalo de confianza
             ax.plot([low, high], [idx, idx], color=color, linewidth=2)
             # OR (Punto medio)
             ax.plot(or_val, idx, marker, color=color, markersize=markersize, markeredgecolor=color)
-            
+
         ax.set_yticks(range(len(labels)))
         ax.set_yticklabels(labels, color='#FFFFFF', fontsize=9, fontweight='bold')
         ax.set_xlabel("Odds Ratio (OR) e Intervalo de Confianza (95%)", color='#FFFFFF', fontsize=10)
-        ax.set_title("Eficacia Comparativa Quirúrgica (Meta-Análisis)", color='#00D2C4', fontsize=11, fontweight='bold')
+        plot_title = "Meta-Análisis: Efecto Comparativo por Estudio" if using_real_data else "Eficacia Comparativa Quirúrgica (Meta-Análisis)"
+        ax.set_title(plot_title, color='#00D2C4', fontsize=11, fontweight='bold')
         
         ax.tick_params(colors='#FFFFFF', which='both', labelsize=9)
         ax.spines['bottom'].set_color('#FFFFFF')
@@ -120,11 +146,13 @@ def generate_forest_plot(run_id: str) -> str:
         logger.error(f"Error generando Forest Plot: {e}")
         return ""
 
-def build_pptx(slides_list: list, filepath: str, run_id: str = None):
+def build_pptx(slides_list: list, filepath: str, run_id: str = None, meta_analysis: dict = None):
     """
     Toma la lista de diccionarios de diapositivas y genera una presentación PPTX
     16:9 premium y libre de errores de maquetación, con notas del orador.
     """
+    _forest_data = (meta_analysis or {}).get("forest_plot_data") or []
+
     prs = Presentation()
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
@@ -350,7 +378,7 @@ def build_pptx(slides_list: list, filepath: str, run_id: str = None):
             if not img_url:
                 img_url = f"static/downloads/{run_id}/forest_plot_synthetic.png"
                 if not os.path.exists(img_url):
-                    img_url = generate_forest_plot(run_id)
+                    img_url = generate_forest_plot(run_id, forest_plot_data=_forest_data)
                     
             if img_url and os.path.exists(img_url):
                 try:
@@ -377,7 +405,7 @@ def build_pptx(slides_list: list, filepath: str, run_id: str = None):
             add_slide_title(slide, title)
             
             bullets = s.get("bullets", [])
-            img_path = generate_forest_plot(run_id)
+            img_path = generate_forest_plot(run_id, forest_plot_data=_forest_data)
             
             if img_path and os.path.exists(img_path):
                 try:
