@@ -755,8 +755,8 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
 
     await event_queue.put(buscador.format_log(proposal, "search"))
 
-    # ── TURNO 2: ESTRATEGA ────────────────────────────────────────────────
-    logger.info("Paso 1 › Turno 2: Estratega de Búsqueda")
+    # ── TURNO 2: ESTRATEGA (en paralelo con las búsquedas de API) ───────────
+    logger.info("Paso 1 › Turno 2: Estratega de Búsqueda (paralelo con APIs)")
 
     prompt_agente2 = f"""
     Actúa como el AGENTE 2 — ESTRATEGA DE BÚSQUEDA EN BASES DE DATOS.
@@ -774,16 +774,6 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
     Responde en español con Markdown premium.
     """
 
-    try:
-        agente2_msg = await asyncio.wait_for(
-            call_gemini(prompt_agente2, temperature=0.2, thinking_budget=0, timeout=40.0),
-            timeout=45.0
-        )
-    except Exception as e:
-        logger.error(f"Agente 2 falló: {e}. Usando fallback.")
-        agente2_msg = f"**AGENTE 2 — ESTRATEGA**: Búsqueda configurada para `{search_term}` en PubMed, Semantic Scholar, CrossRef y OpenAlex. Aplicando filtros pediátricos y de alta evidencia."
-    await event_queue.put(critico.format_log(agente2_msg, "search"))
-
     # ── BÚSQUEDA EN APIS (con filtro pediátrico automático) ───────────────
     pediatric_keywords = ["pediat", "paediat", "child", "infan", "newborn", "neonat", "adolesc"]
     if not any(kw in search_term.lower() for kw in pediatric_keywords):
@@ -800,12 +790,24 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
         "search"
     ))
 
-    # Búsqueda primaria + guías en paralelo
-    filtered_primary, guideline_papers = await asyncio.gather(
+    # Agente 2 + búsqueda primaria + guías en paralelo (elimina espera secuencial de ~45s)
+    gather_results = await asyncio.gather(
+        asyncio.wait_for(
+            call_gemini(prompt_agente2, temperature=0.2, thinking_budget=0, timeout=25.0),
+            timeout=30.0
+        ),
         _run_apis(search_term_api),
         query_guidelines(search_term_api),
         return_exceptions=True
     )
+    agente2_result, filtered_primary, guideline_papers = gather_results
+
+    if isinstance(agente2_result, str):
+        agente2_msg = agente2_result
+    else:
+        logger.error(f"Agente 2 falló: {agente2_result}. Usando fallback.")
+        agente2_msg = f"**AGENTE 2 — ESTRATEGA**: Búsqueda configurada para `{search_term}` en PubMed, Semantic Scholar, CrossRef y OpenAlex. Aplicando filtros pediátricos y de alta evidencia."
+    await event_queue.put(critico.format_log(agente2_msg, "search"))
     if isinstance(filtered_primary, Exception):
         logger.error(f"_run_apis falló: {filtered_primary}")
         filtered_primary = []
