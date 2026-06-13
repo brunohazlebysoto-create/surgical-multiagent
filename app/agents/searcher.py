@@ -737,8 +737,8 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
     search_term_broad: Optional[str] = None
     try:
         raw = await asyncio.wait_for(
-            call_gemini(prompt_agente1, json_mode=True, temperature=0.1, thinking_budget=0, timeout=45.0),
-            timeout=50.0
+            call_gemini(prompt_agente1, json_mode=True, temperature=0.1, thinking_budget=1024, timeout=60.0),
+            timeout=70.0
         )
         cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         data = json.loads(cleaned)
@@ -930,8 +930,8 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
 
     try:
         agente3_msg = await asyncio.wait_for(
-            call_gemini(prompt_agente3, temperature=0.2, thinking_budget=0, timeout=50.0),
-            timeout=55.0
+            call_gemini(prompt_agente3, temperature=0.2, thinking_budget=2048, timeout=90.0),
+            timeout=100.0
         )
     except Exception as e:
         logger.error(f"Agente 3 falló: {e}. Usando fallback.")

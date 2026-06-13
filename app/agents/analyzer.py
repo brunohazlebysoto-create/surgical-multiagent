@@ -176,7 +176,7 @@ async def run_analyzer_panel(papers: List[Dict[str, Any]], event_queue: asyncio.
     Devuelve un JSON exacto con las claves: "extractor_log", "auditor_log", "curador_log".
     """
     try:
-        response_debate = await call_gemini(prompt_debate, json_mode=True, temperature=0.3, thinking_budget=0, timeout=60.0)
+        response_debate = await call_gemini(prompt_debate, json_mode=True, temperature=0.3, thinking_budget=1024, timeout=90.0)
         debate_data = json.loads(response_debate)
         ext_msg = debate_data.get("extractor_log", "Análisis PICO-S completado.")
         aud_msg = debate_data.get("auditor_log", "Calidad metodológica auditada con éxito.")
