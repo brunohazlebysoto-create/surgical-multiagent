@@ -755,8 +755,8 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
 
     await event_queue.put(buscador.format_log(proposal, "search"))
 
-    # ── TURNO 2: ESTRATEGA (en paralelo con las búsquedas de API) ───────────
-    logger.info("Paso 1 › Turno 2: Estratega de Búsqueda (paralelo con APIs)")
+    # ── TURNO 2: ESTRATEGA + APIS EN PARALELO ────────────────────────────────
+    logger.info("Paso 1 › Turno 2: Estratega + búsqueda API en paralelo")
 
     prompt_agente2 = f"""
     Actúa como el AGENTE 2 — ESTRATEGA DE BÚSQUEDA EN BASES DE DATOS.
@@ -790,29 +790,40 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
         "search"
     ))
 
-    # Agente 2 + búsqueda primaria + guías en paralelo (elimina espera secuencial de ~45s)
-    gather_results = await asyncio.gather(
-        asyncio.wait_for(
-            call_gemini(prompt_agente2, temperature=0.2, thinking_budget=0, timeout=25.0),
-            timeout=30.0
-        ),
-        _run_apis(search_term_api),
-        query_guidelines(search_term_api),
-        return_exceptions=True
+    # Las APIs y el Agente 2 arrancan inmediatamente como tareas en segundo plano.
+    # Así las 4 fuentes bibliográficas se consultan en paralelo mientras Gemini
+    # redacta la estrategia — sin bloquear uno al otro.
+    task_apis        = asyncio.create_task(_run_apis(search_term_api))
+    task_guidelines  = asyncio.create_task(query_guidelines(search_term_api))
+    task_agent2      = asyncio.create_task(
+        call_gemini(prompt_agente2, temperature=0.2, thinking_budget=0, timeout=20.0)
     )
-    agente2_result, filtered_primary, guideline_papers = gather_results
 
-    if isinstance(agente2_result, str):
-        agente2_msg = agente2_result
-    else:
-        logger.error(f"Agente 2 falló: {agente2_result}. Usando fallback.")
-        agente2_msg = f"**AGENTE 2 — ESTRATEGA**: Búsqueda configurada para `{search_term}` en PubMed, Semantic Scholar, CrossRef y OpenAlex. Aplicando filtros pediátricos y de alta evidencia."
+    # Mostrar el mensaje del Agente 2 tan pronto como esté listo (máx 22 s).
+    # thinking_budget=0 → respuesta rápida; el fallback asegura que nunca bloquee.
+    try:
+        agente2_msg = await asyncio.wait_for(asyncio.shield(task_agent2), timeout=22.0)
+    except Exception as e:
+        logger.error(f"Agente 2 falló: {e}. Usando fallback.")
+        agente2_msg = (
+            f"**AGENTE 2 — ESTRATEGA**: Estrategia de búsqueda configurada para `{search_term}` "
+            f"en PubMed, Semantic Scholar, CrossRef y OpenAlex. "
+            f"Aplicando filtros pediátricos y de alta evidencia. Traspaso al **AGENTE 3**."
+        )
+        if not task_agent2.done():
+            task_agent2.cancel()
     await event_queue.put(critico.format_log(agente2_msg, "search"))
-    if isinstance(filtered_primary, Exception):
-        logger.error(f"_run_apis falló: {filtered_primary}")
+
+    # Esperar los resultados de las APIs (que ya llevan ~22 s corriendo en segundo plano).
+    try:
+        filtered_primary = await asyncio.wait_for(task_apis, timeout=120.0)
+    except Exception as e:
+        logger.error(f"_run_apis falló: {e}")
         filtered_primary = []
-    if isinstance(guideline_papers, Exception):
-        logger.error(f"query_guidelines falló: {guideline_papers}")
+    try:
+        guideline_papers = await asyncio.wait_for(task_guidelines, timeout=30.0)
+    except Exception as e:
+        logger.error(f"query_guidelines falló: {e}")
         guideline_papers = []
 
     if guideline_papers:
@@ -887,6 +898,11 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
 
     # ── TURNO 3: REVISOR CRÍTICO ──────────────────────────────────────────
     logger.info("Paso 1 › Turno 3: Revisor Crítico")
+    await event_queue.put(refinador.format_log(
+        f"Recibidos **{len(final_papers)} artículos** seleccionados. "
+        f"Iniciando revisión crítica de evidencia y jerarquización por nivel de estudio...",
+        "search"
+    ))
 
     papers_to_review = final_papers[:8]
     papers_json_str = json.dumps([{
