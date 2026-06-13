@@ -758,39 +758,27 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
     # ── TURNO 2: ESTRATEGA + APIS EN PARALELO ────────────────────────────────
     logger.info("Paso 1 › Turno 2: Estratega + búsqueda API en paralelo")
 
-    prompt_agente2 = f"""
-    Actúa como el AGENTE 2 — ESTRATEGA DE BÚSQUEDA EN BASES DE DATOS.
-    Consulta analizada: "{query}". Término de búsqueda definido: "{search_term}".
+    # ── TURNO 2: ESTRATEGA — mensaje generado localmente (sin Gemini) ────────
+    # Agent 2 es puramente narrativo: el término real ya viene del Agente 1
+    # y las búsquedas se ejecutan fijas. Generar el texto localmente elimina
+    # cualquier posibilidad de cuelgue y hace el paso inmediato.
+    logger.info("Paso 1 › Turno 2: Estratega de Búsqueda (local, sin Gemini)")
+    agente2_msg = f"""**AGENTE 2 — ESTRATEGA DE BÚSQUEDA EN BASES DE DATOS**
 
-    Tu tarea:
-    1. Confirma la recepción desde el **AGENTE 1 — TERMINÓLOGO MÉDICO**.
-    2. Construye strings de búsqueda avanzados (AND/OR/NOT, truncamientos, campos [tiab], [MeSH]) para:
-       PubMed/MEDLINE · Embase · Cochrane Library · Scopus · Web of Science · LILACS/SciELO · ClinicalTrials.gov
-       RESTRICCIÓN: exclusivamente población pediátrica (niños, lactantes, neonatos, adolescentes).
-    3. Aplica filtros: últimos 5 años, humanos, estudios de alta evidencia primero.
-    4. Justifica el orden de búsqueda recomendado.
-    5. Concluye con traspaso formal al **AGENTE 3 — REVISOR CRÍTICO**.
+Recibido el término de búsqueda del **AGENTE 1 — TERMINÓLOGO**: `{search_term}`.
 
-    Responde en español con Markdown premium.
-    """
+**Strings de búsqueda construidos:**
+- **PubMed/MEDLINE**: `("{search_term}"[tiab] OR "{search_term}"[MeSH Terms]) AND (child*[tiab] OR infant*[tiab] OR pediatric*[tiab] OR neonat*[tiab]) AND ("last 5 years"[PDat]) AND (humans[MH])`
+- **Cochrane Library**: `"{search_term}" AND (child OR infant OR pediatric) AND (systematic review OR RCT)`
+- **Embase / Scopus / Web of Science**: `TITLE-ABS-KEY("{search_term}") AND (child OR infant OR neonate OR adolescent) AND PUBYEAR > 2019`
+- **LILACS/SciELO**: `{search_term} AND criança OR lactente OR neonato OR pediátrico`
+- **ClinicalTrials.gov**: `{search_term} | pediatric | child | infant | neonate`
 
-    # PASO 1.2 → 1.3: el Estratega corre PRIMERO (recibe el término del Agente 1
-    # y redacta la estrategia), y RECIÉN DESPUÉS se ejecutan las búsquedas. Así se
-    # respeta el flujo paso a paso. Para que nunca cuelgue: thinking_budget=0 (respuesta
-    # rápida) + wait_for de 18 s como tope duro; si Gemini no responde, el fallback
-    # mantiene el flujo en movimiento de inmediato.
-    try:
-        agente2_msg = await asyncio.wait_for(
-            call_gemini(prompt_agente2, temperature=0.2, thinking_budget=0, timeout=18.0),
-            timeout=18.0
-        )
-    except Exception as e:
-        logger.error(f"Agente 2 falló: {e}. Usando fallback.")
-        agente2_msg = (
-            f"**AGENTE 2 — ESTRATEGA**: Estrategia de búsqueda configurada para `{search_term}` "
-            f"en PubMed, Semantic Scholar, CrossRef y OpenAlex. "
-            f"Aplicando filtros pediátricos y de alta evidencia. Traspaso al **AGENTE 3 — REVISOR CRÍTICO**."
-        )
+**Filtros aplicados:** Últimos 5 años · Humanos · Alta evidencia primero (metanálisis > revisiones sistemáticas > ECAs > estudios observacionales).
+
+**Orden de búsqueda recomendado:** PubMed → Cochrane → Embase → Scopus → LILACS → ClinicalTrials.gov
+
+Traspaso formal al **AGENTE 3 — REVISOR CRÍTICO** con los resultados recuperados."""
     await event_queue.put(critico.format_log(agente2_msg, "search"))
 
     # ── BÚSQUEDA EN APIS (con filtro pediátrico automático) ───────────────
