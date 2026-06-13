@@ -774,6 +774,25 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
     Responde en español con Markdown premium.
     """
 
+    # PASO 1.2 → 1.3: el Estratega corre PRIMERO (recibe el término del Agente 1
+    # y redacta la estrategia), y RECIÉN DESPUÉS se ejecutan las búsquedas. Así se
+    # respeta el flujo paso a paso. Para que nunca cuelgue: thinking_budget=0 (respuesta
+    # rápida) + wait_for de 18 s como tope duro; si Gemini no responde, el fallback
+    # mantiene el flujo en movimiento de inmediato.
+    try:
+        agente2_msg = await asyncio.wait_for(
+            call_gemini(prompt_agente2, temperature=0.2, thinking_budget=0, timeout=18.0),
+            timeout=18.0
+        )
+    except Exception as e:
+        logger.error(f"Agente 2 falló: {e}. Usando fallback.")
+        agente2_msg = (
+            f"**AGENTE 2 — ESTRATEGA**: Estrategia de búsqueda configurada para `{search_term}` "
+            f"en PubMed, Semantic Scholar, CrossRef y OpenAlex. "
+            f"Aplicando filtros pediátricos y de alta evidencia. Traspaso al **AGENTE 3 — REVISOR CRÍTICO**."
+        )
+    await event_queue.put(critico.format_log(agente2_msg, "search"))
+
     # ── BÚSQUEDA EN APIS (con filtro pediátrico automático) ───────────────
     pediatric_keywords = ["pediat", "paediat", "child", "infan", "newborn", "neonat", "adolesc"]
     if not any(kw in search_term.lower() for kw in pediatric_keywords):
@@ -790,41 +809,32 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
         "search"
     ))
 
-    # Las APIs y el Agente 2 arrancan inmediatamente como tareas en segundo plano.
-    # Así las 4 fuentes bibliográficas se consultan en paralelo mientras Gemini
-    # redacta la estrategia — sin bloquear uno al otro.
-    task_apis        = asyncio.create_task(_run_apis(search_term_api))
-    task_guidelines  = asyncio.create_task(query_guidelines(search_term_api))
-    task_agent2      = asyncio.create_task(
-        call_gemini(prompt_agente2, temperature=0.2, thinking_budget=0, timeout=20.0)
-    )
-
-    # Mostrar el mensaje del Agente 2 tan pronto como esté listo (máx 22 s).
-    # thinking_budget=0 → respuesta rápida; el fallback asegura que nunca bloquee.
+    # Las 4 fuentes bibliográficas + las guías corren en paralelo entre sí (cada una
+    # con su propio timeout httpx de 15-25 s), pero como bloque secuencial DESPUÉS del
+    # Estratega. Tope duro de 60 s por si una fuente se degrada.
     try:
-        agente2_msg = await asyncio.wait_for(asyncio.shield(task_agent2), timeout=22.0)
-    except Exception as e:
-        logger.error(f"Agente 2 falló: {e}. Usando fallback.")
-        agente2_msg = (
-            f"**AGENTE 2 — ESTRATEGA**: Estrategia de búsqueda configurada para `{search_term}` "
-            f"en PubMed, Semantic Scholar, CrossRef y OpenAlex. "
-            f"Aplicando filtros pediátricos y de alta evidencia. Traspaso al **AGENTE 3**."
+        filtered_primary, guideline_papers = await asyncio.wait_for(
+            asyncio.gather(
+                _run_apis(search_term_api),
+                query_guidelines(search_term_api),
+                return_exceptions=True
+            ),
+            timeout=60.0
         )
-        if not task_agent2.done():
-            task_agent2.cancel()
-    await event_queue.put(critico.format_log(agente2_msg, "search"))
-
-    # Esperar los resultados de las APIs (que ya llevan ~22 s corriendo en segundo plano).
-    try:
-        filtered_primary = await asyncio.wait_for(task_apis, timeout=120.0)
     except Exception as e:
-        logger.error(f"_run_apis falló: {e}")
+        logger.error(f"Búsqueda de APIs falló o expiró: {e}")
+        filtered_primary, guideline_papers = [], []
+    if isinstance(filtered_primary, Exception) or not isinstance(filtered_primary, list):
+        logger.error(f"_run_apis falló: {filtered_primary}")
         filtered_primary = []
-    try:
-        guideline_papers = await asyncio.wait_for(task_guidelines, timeout=30.0)
-    except Exception as e:
-        logger.error(f"query_guidelines falló: {e}")
+    if isinstance(guideline_papers, Exception) or not isinstance(guideline_papers, list):
+        logger.error(f"query_guidelines falló: {guideline_papers}")
         guideline_papers = []
+
+    await event_queue.put(critico.format_log(
+        f"Búsqueda completada: **{len(filtered_primary)} artículos** recuperados de las bases primarias.",
+        "search"
+    ))
 
     if guideline_papers:
         await event_queue.put(critico.format_log(
