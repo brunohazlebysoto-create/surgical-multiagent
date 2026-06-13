@@ -47,7 +47,13 @@ async def run_meta_analyst_panel(
     redactor = ScientificWriterAgent()
     
     logger.info("Iniciando Paso 3: Panel de Meta-Análisis Optimizado")
-    
+
+    # Evento inmediato para que el usuario sepa que el paso 3 ya comenzó
+    await event_queue.put(sintetizador.format_log(
+        f"Recibí {len(analyzed_papers)} fichas PICO-S del Paso 2. Construyendo corpus de evidencia y enviando al motor de síntesis GRADE (puede tardar 60-90 s)...",
+        "meta_analyze"
+    ))
+
     # Formatear el corpus analizado incluyendo autores, revista y DOI para citas correctas
     corpus_str = ""
     for i, p in enumerate(analyzed_papers):
