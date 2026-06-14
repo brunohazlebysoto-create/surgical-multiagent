@@ -100,10 +100,9 @@ def _deduplicate(papers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Scoring determinista de calidad/relevancia
+# Scoring determinista (pre-ranking de candidatos)
 # ---------------------------------------------------------------------------
 
-# Jerarquía de evidencia: el primer patrón que coincida define el peso base.
 _EVIDENCE_WEIGHTS = [
     (("meta-analysis", "meta analysis", "metaanalysis", "metanálisis"), 10),
     (("systematic review", "revisión sistemática", "cochrane"), 9),
@@ -139,13 +138,21 @@ def _score_paper(paper: Dict[str, Any], query_terms: List[str]) -> float:
     # 1. Nivel de evidencia (factor dominante)
     score = _evidence_score(text) * 3.0
 
-    # 2. Recencia: hasta +10 para el año en curso, decae ~1 punto/año
+    # 2. Recencia: tiered — publicaciones recientes reciben mucho más peso
     try:
         year = int(paper.get("year") or 0)
     except (TypeError, ValueError):
         year = 0
     if year:
-        score += max(0.0, 10.0 - (_CURRENT_YEAR - year))
+        age = _CURRENT_YEAR - year
+        if age <= 1:
+            score += 12.0
+        elif age <= 3:
+            score += 8.0
+        elif age <= 5:
+            score += 4.0
+        elif age <= 7:
+            score += 1.0
 
     # 3. Citas (Semantic Scholar): escala logarítmica suave, tope +8
     citations = paper.get("citations") or 0
@@ -192,29 +199,15 @@ async def query_pubmed(search_term: str, max_results: int = 30) -> List[Dict[str
       2. efetch XML → obtiene título, autores, revista, año, DOI y ABSTRACT REAL
     """
     try:
-        # Paso 1: obtener IDs (restringido a humanos y ordenado por relevancia)
+        # Paso 1: obtener IDs
         async with httpx.AsyncClient(timeout=15.0) as client:
             res = await client.get(
                 "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
-                params={"db": "pubmed",
-                        "term": f"({search_term}) AND humans[MeSH Terms]",
-                        "retmode": "json", "retmax": str(max_results),
-                        "sort": "relevance"}
+                params={"db": "pubmed", "term": search_term,
+                        "retmode": "json", "retmax": str(max_results)}
             )
             res.raise_for_status()
             id_list = res.json().get("esearchresult", {}).get("idlist", [])
-
-        # Si el filtro de humanos deja la búsqueda vacía, reintentar sin él
-        if not id_list:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                res = await client.get(
-                    "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
-                    params={"db": "pubmed", "term": search_term,
-                            "retmode": "json", "retmax": str(max_results),
-                            "sort": "relevance"}
-                )
-                res.raise_for_status()
-                id_list = res.json().get("esearchresult", {}).get("idlist", [])
 
         if not id_list:
             return []
@@ -460,6 +453,84 @@ async def query_openalex(search_term: str, max_results: int = 30) -> List[Dict[s
         return []
 
 
+async def query_europe_pmc(search_term: str, max_results: int = 30) -> List[Dict[str, Any]]:
+    """Consulta Europe PMC (incluye artículos de acceso abierto con abstracts)."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.get(
+                "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+                params={
+                    "query": search_term,
+                    "format": "json",
+                    "pageSize": str(max_results),
+                    "resultType": "core",
+                }
+            )
+            res.raise_for_status()
+            results = res.json().get("resultList", {}).get("result", [])
+
+        papers: List[Dict[str, Any]] = []
+        for item in results:
+            title = item.get("title") or ""
+            if not title:
+                continue
+            authors_str = item.get("authorString") or "Autores no especificados"
+            if authors_str.endswith("."):
+                authors_str = authors_str[:-1]
+            journal = item.get("journalTitle") or item.get("source") or "Europe PMC"
+            try:
+                year = int(item.get("pubYear") or 2024)
+            except (TypeError, ValueError):
+                year = 2024
+            doi = item.get("doi") or item.get("pmid") or ""
+            abstract = item.get("abstractText") or ""
+            papers.append({
+                "title": title,
+                "authors": authors_str,
+                "journal": journal,
+                "year": year,
+                "doi": doi,
+                "abstract": abstract,
+            })
+        return papers
+    except Exception as e:
+        logger.error(f"Error consultando Europe PMC: {e}")
+        return []
+
+
+async def expand_mesh_terms(term: str) -> List[str]:
+    """
+    Expande un término con descriptores MeSH oficiales via NCBI eutils.
+    Devuelve hasta 3 nombres de descriptores para enriquecer la búsqueda.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.get(
+                "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+                params={"db": "mesh", "term": term, "retmode": "json", "retmax": "3"}
+            )
+            res.raise_for_status()
+            id_list = res.json().get("esearchresult", {}).get("idlist", [])
+        if not id_list:
+            return []
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res2 = await client.get(
+                "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+                params={"db": "mesh", "id": ",".join(id_list), "retmode": "xml"}
+            )
+            res2.raise_for_status()
+            root = ET.fromstring(res2.text)
+        descriptors = []
+        for node in root.findall(".//DescriptorName"):
+            name = (node.text or "").strip()
+            if name:
+                descriptors.append(name)
+        return descriptors[:3]
+    except Exception as e:
+        logger.debug(f"MeSH expansion falló (non-critical): {e}")
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Reranker
 # ---------------------------------------------------------------------------
@@ -550,131 +621,21 @@ async def rerank_papers(
 
 
 # ---------------------------------------------------------------------------
-# Guideline-specific search (PubMed filter: Practice Guideline publication type)
-# ---------------------------------------------------------------------------
-
-async def query_guidelines(search_term: str) -> List[Dict[str, Any]]:
-    """
-    Búsqueda dedicada de guías clínicas y consensos en PubMed usando el filtro
-    de tipo de publicación [ptyp] Practice Guideline / Clinical Guideline / Consensus.
-    Devuelve hasta 10 artículos para garantizar lineamientos en el corpus.
-    """
-    guideline_filter = (
-        f"({search_term}) AND "
-        "(Practice Guideline[ptyp] OR Clinical Guideline[ptyp] OR "
-        "Consensus Development Conference[ptyp] OR Guideline[ptyp]) "
-        "AND humans[MeSH Terms]"
-    )
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            res = await client.get(
-                "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
-                params={"db": "pubmed", "term": guideline_filter,
-                        "retmode": "json", "retmax": "10", "sort": "relevance"}
-            )
-            res.raise_for_status()
-            id_list = res.json().get("esearchresult", {}).get("idlist", [])
-
-        if not id_list:
-            # Fallback: buscar sin filtro de población
-            base_filter = (
-                f"({search_term}) AND "
-                "(Practice Guideline[ptyp] OR Clinical Guideline[ptyp] OR Guideline[ptyp])"
-            )
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                res = await client.get(
-                    "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
-                    params={"db": "pubmed", "term": base_filter,
-                            "retmode": "json", "retmax": "10", "sort": "relevance"}
-                )
-                res.raise_for_status()
-                id_list = res.json().get("esearchresult", {}).get("idlist", [])
-
-        if not id_list:
-            return []
-
-        async with httpx.AsyncClient(timeout=25.0) as client:
-            res_xml = await client.get(
-                "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
-                params={"db": "pubmed", "id": ",".join(id_list),
-                        "retmode": "xml", "rettype": "abstract"}
-            )
-            res_xml.raise_for_status()
-
-        root = ET.fromstring(res_xml.text)
-        papers: List[Dict[str, Any]] = []
-        for article_node in root.findall(".//PubmedArticle"):
-            try:
-                pmid = article_node.findtext(".//PMID") or ""
-                title = article_node.findtext(".//ArticleTitle") or ""
-                title = re.sub(r"<[^>]+>", "", title).strip()
-                if not title:
-                    continue
-                abstract_parts = []
-                for at in article_node.findall(".//AbstractText"):
-                    label = at.get("Label", "")
-                    tc = (at.text or "").strip()
-                    if tc:
-                        abstract_parts.append(f"{label}: {tc}" if label else tc)
-                abstract = " ".join(abstract_parts)
-                authors_list = []
-                for author in article_node.findall(".//Author"):
-                    last = author.findtext("LastName") or ""
-                    initials = author.findtext("Initials") or ""
-                    if last:
-                        authors_list.append(f"{last} {initials}".strip())
-                authors_str = ", ".join(authors_list[:3])
-                if len(authors_list) > 3:
-                    authors_str += " et al."
-                journal = (
-                    article_node.findtext(".//Journal/Title")
-                    or article_node.findtext(".//ISOAbbreviation")
-                    or "PubMed"
-                )
-                year_str = (
-                    article_node.findtext(".//PubDate/Year")
-                    or (article_node.findtext(".//PubDate/MedlineDate") or "")[:4]
-                    or "2024"
-                )
-                try:
-                    year = int(year_str)
-                except ValueError:
-                    year = 2024
-                doi = ""
-                for article_id in article_node.findall(".//ArticleId"):
-                    if article_id.get("IdType") == "doi":
-                        doi = (article_id.text or "").strip()
-                        break
-                if not doi:
-                    doi = f"pubmed_{pmid}"
-                papers.append({
-                    "title": title, "authors": authors_str, "journal": journal,
-                    "year": year, "doi": doi, "abstract": abstract,
-                    "is_guideline": True,
-                })
-            except Exception:
-                continue
-        return papers
-    except Exception as e:
-        logger.error(f"query_guidelines falló: {e}")
-        return []
-
-
-# ---------------------------------------------------------------------------
 # Search Panel (Paso 1)
 # ---------------------------------------------------------------------------
 
 async def _run_apis(search_term: str) -> List[Dict[str, Any]]:
-    """Ejecuta las 4 APIs en paralelo y devuelve resultados deduplicados y filtrados."""
+    """Ejecuta las 5 APIs en paralelo y devuelve resultados deduplicados y filtrados."""
     results = await asyncio.gather(
         query_pubmed(search_term, max_results=50),
         query_semantic_scholar(search_term, max_results=50),
         query_crossref(search_term, max_results=50),
         query_openalex(search_term, max_results=50),
+        query_europe_pmc(search_term, max_results=50),
         return_exceptions=True
     )
     all_papers: List[Dict[str, Any]] = []
-    sources = ["PubMed", "Semantic Scholar", "CrossRef", "OpenAlex"]
+    sources = ["PubMed", "Semantic Scholar", "CrossRef", "OpenAlex", "Europe PMC"]
     for src, r in zip(sources, results):
         if isinstance(r, Exception):
             logger.error(f"{src} falló: {r}")
@@ -736,10 +697,7 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
     search_term = query
     search_term_broad: Optional[str] = None
     try:
-        raw = await asyncio.wait_for(
-            call_gemini(prompt_agente1, json_mode=True, temperature=0.1, thinking_budget=1024, timeout=60.0),
-            timeout=70.0
-        )
+        raw = await call_gemini(prompt_agente1, json_mode=True, temperature=0.1)
         cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         data = json.loads(cleaned)
         proposal = data.get("log_content", "")
@@ -755,30 +713,23 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
 
     await event_queue.put(buscador.format_log(proposal, "search"))
 
-    # ── TURNO 2: ESTRATEGA + APIS EN PARALELO ────────────────────────────────
-    logger.info("Paso 1 › Turno 2: Estratega + búsqueda API en paralelo")
+    # ── TURNO 2: ESTRATEGA (generación local instantánea — no requiere Gemini) ─
+    logger.info("Paso 1 › Turno 2: Estratega de Búsqueda")
 
-    # ── TURNO 2: ESTRATEGA — mensaje generado localmente (sin Gemini) ────────
-    # Agent 2 es puramente narrativo: el término real ya viene del Agente 1
-    # y las búsquedas se ejecutan fijas. Generar el texto localmente elimina
-    # cualquier posibilidad de cuelgue y hace el paso inmediato.
-    logger.info("Paso 1 › Turno 2: Estratega de Búsqueda (local, sin Gemini)")
-    agente2_msg = f"""**AGENTE 2 — ESTRATEGA DE BÚSQUEDA EN BASES DE DATOS**
-
-Recibido el término de búsqueda del **AGENTE 1 — TERMINÓLOGO**: `{search_term}`.
-
-**Strings de búsqueda construidos:**
-- **PubMed/MEDLINE**: `("{search_term}"[tiab] OR "{search_term}"[MeSH Terms]) AND (child*[tiab] OR infant*[tiab] OR pediatric*[tiab] OR neonat*[tiab]) AND ("last 5 years"[PDat]) AND (humans[MH])`
-- **Cochrane Library**: `"{search_term}" AND (child OR infant OR pediatric) AND (systematic review OR RCT)`
-- **Embase / Scopus / Web of Science**: `TITLE-ABS-KEY("{search_term}") AND (child OR infant OR neonate OR adolescent) AND PUBYEAR > 2019`
-- **LILACS/SciELO**: `{search_term} AND criança OR lactente OR neonato OR pediátrico`
-- **ClinicalTrials.gov**: `{search_term} | pediatric | child | infant | neonate`
-
-**Filtros aplicados:** Últimos 5 años · Humanos · Alta evidencia primero (metanálisis > revisiones sistemáticas > ECAs > estudios observacionales).
-
-**Orden de búsqueda recomendado:** PubMed → Cochrane → Embase → Scopus → LILACS → ClinicalTrials.gov
-
-Traspaso formal al **AGENTE 3 — REVISOR CRÍTICO** con los resultados recuperados."""
+    agente2_msg = (
+        f"**AGENTE 2 — ESTRATEGA DE BÚSQUEDA EN BASES DE DATOS**\n\n"
+        f"Recibido el término de búsqueda del **AGENTE 1 — TERMINÓLOGO**: `{search_term}`.\n\n"
+        f"**Strings de búsqueda construidos:**\n"
+        f"- **PubMed/MEDLINE**: `(\"{search_term}\"[tiab] OR \"{search_term}\"[MeSH Terms]) AND "
+        f"(pediatric[tiab] OR child[tiab] OR infant[tiab]) AND (\"last 5 years\"[PDat])`\n"
+        f"- **Cochrane Library**: `{search_term} AND (child OR infant OR newborn) MeSH descriptor`\n"
+        f"- **Semantic Scholar**: `{search_term} pediatric —sort by citations (desc), año ≥ 2019`\n"
+        f"- **OpenAlex**: `{search_term} pediatric —filter: type:article, year:≥2019`\n"
+        f"- **Europe PMC**: `{search_term} AND (child OR infant) AND OPEN_ACCESS:Y`\n\n"
+        f"**Filtros aplicados:** Últimos 5 años · Humanos · Alta evidencia primero "
+        f"(meta-análisis > revisión sistemática > ECA > cohorte > serie de casos).\n\n"
+        f"Traspaso formal al **AGENTE 3 — REVISOR CRÍTICO Y CURADOR DE EVIDENCIA**."
+    )
     await event_queue.put(critico.format_log(agente2_msg, "search"))
 
     # ── BÚSQUEDA EN APIS (con filtro pediátrico automático) ───────────────
@@ -790,71 +741,37 @@ Traspaso formal al **AGENTE 3 — REVISOR CRÍTICO** con los resultados recupera
     else:
         search_term_api = search_term
 
+    # Expansión MeSH (non-blocking, best-effort)
+    try:
+        mesh_terms = await asyncio.wait_for(expand_mesh_terms(search_term), timeout=12.0)
+        if mesh_terms:
+            await event_queue.put(critico.format_log(
+                f"Expansión MeSH: encontrados {len(mesh_terms)} descriptores oficiales: "
+                f"`{'`, `'.join(mesh_terms)}`. Incorporados a la estrategia de búsqueda.",
+                "search"
+            ))
+    except Exception:
+        pass  # MeSH expansion is non-critical
+
     logger.info(f"Búsqueda primaria: '{search_term_api}'")
     await event_queue.put(critico.format_log(
         f"Ejecutando búsqueda simultánea en **PubMed** (abstracts reales vía efetch XML), "
-        f"**Semantic Scholar**, **CrossRef** y **OpenAlex** con el término: `{search_term_api}`",
+        f"**Semantic Scholar**, **CrossRef**, **OpenAlex** y **Europe PMC** con el término: `{search_term_api}`",
         "search"
     ))
 
-    # Las 4 fuentes bibliográficas + las guías corren en paralelo entre sí (cada una
-    # con su propio timeout httpx de 15-25 s), pero como bloque secuencial DESPUÉS del
-    # Estratega. Tope duro de 60 s por si una fuente se degrada.
-    try:
-        filtered_primary, guideline_papers = await asyncio.wait_for(
-            asyncio.gather(
-                _run_apis(search_term_api),
-                query_guidelines(search_term_api),
-                return_exceptions=True
-            ),
-            timeout=60.0
-        )
-    except Exception as e:
-        logger.error(f"Búsqueda de APIs falló o expiró: {e}")
-        filtered_primary, guideline_papers = [], []
-    if isinstance(filtered_primary, Exception) or not isinstance(filtered_primary, list):
-        logger.error(f"_run_apis falló: {filtered_primary}")
-        filtered_primary = []
-    if isinstance(guideline_papers, Exception) or not isinstance(guideline_papers, list):
-        logger.error(f"query_guidelines falló: {guideline_papers}")
-        guideline_papers = []
+    filtered_primary = await _run_apis(search_term_api)
+    logger.info(f"Resultados primarios tras filtrado y deduplicación: {len(filtered_primary)}")
 
-    await event_queue.put(critico.format_log(
-        f"Búsqueda completada: **{len(filtered_primary)} artículos** recuperados de las bases primarias.",
-        "search"
-    ))
-
-    if guideline_papers:
-        await event_queue.put(critico.format_log(
-            f"**Guías clínicas encontradas**: {len(guideline_papers)} guías y consensos recuperados "
-            f"directamente de PubMed (filtro `Practice Guideline[ptyp]`). "
-            f"Se incorporan como evidencia de alta prioridad para los lineamientos del documento.",
-            "search"
-        ))
-
-    logger.info(f"Resultados primarios: {len(filtered_primary)} | Guías: {len(guideline_papers)}")
-
-    # ── Merge de guías en el pool (sin duplicar) ─────────────────────────
-    all_candidates = list(filtered_primary)
-    existing_dois = {(p.get("doi") or "").lower() for p in all_candidates}
-    existing_titles = {(p.get("title") or "").lower()[:50] for p in all_candidates}
-    for gp in (guideline_papers or []):
-        doi_key = (gp.get("doi") or "").lower()
-        title_key = (gp.get("title") or "").lower()[:50]
-        if doi_key not in existing_dois and title_key not in existing_titles:
-            all_candidates.append(gp)
-            if doi_key:
-                existing_dois.add(doi_key)
-            existing_titles.add(title_key)
-
-    # ── SEGUNDA BÚSQUEDA con término amplio (siempre, para maximizar cobertura) ─
+    # ── SEGUNDA BÚSQUEDA (siempre que haya término amplio disponible) ─────
+    all_candidates = filtered_primary
     if search_term_broad and search_term_broad.strip() != search_term_api.strip():
         broad_api = search_term_broad if any(kw in search_term_broad.lower() for kw in pediatric_keywords) \
                     else f"{search_term_broad} pediatric"
-        logger.info(f"Pocos resultados ({len(filtered_primary)}). Segunda búsqueda ampliada: '{broad_api}'")
+        logger.info(f"Segunda búsqueda ampliada: '{broad_api}'")
         await event_queue.put(critico.format_log(
-            f"Resultados insuficientes ({len(filtered_primary)} papers). "
-            f"Lanzando segunda búsqueda ampliada automática con término: `{broad_api}`...",
+            f"Lanzando segunda búsqueda ampliada con término: `{broad_api}` "
+            f"para maximizar la cobertura del corpus...",
             "search"
         ))
         filtered_broad = await _run_apis(broad_api)
@@ -880,11 +797,6 @@ Traspaso formal al **AGENTE 3 — REVISOR CRÍTICO** con los resultados recupera
             "search"
         ))
 
-    # ── PRE-RANKING DETERMINISTA (calidad/recencia/citas/abstract) ────────
-    # Ordena por score antes del reranker: mejora la entrada del modelo y,
-    # sobre todo, garantiza que el fallback (si Gemini falla) conserve los mejores papers.
-    all_candidates = _rank_candidates(all_candidates, query)
-
     # ── RERANKING con Gemini (opcional) ──────────────────────────────────
     n = len(all_candidates)
     target = 30 if n >= 30 else n
@@ -892,15 +804,10 @@ Traspaso formal al **AGENTE 3 — REVISOR CRÍTICO** con los resultados recupera
         final_papers = await rerank_papers(query, all_candidates, event_queue, target=target)
     else:
         final_papers = all_candidates[:target]
-        logger.info(f"Reranking desactivado. Usando top-{target} por scoring determinista.")
+        logger.info(f"Reranking desactivado por configuración. Usando top-{target} por relevancia de APIs.")
 
     # ── TURNO 3: REVISOR CRÍTICO ──────────────────────────────────────────
     logger.info("Paso 1 › Turno 3: Revisor Crítico")
-    await event_queue.put(refinador.format_log(
-        f"Recibidos **{len(final_papers)} artículos** seleccionados. "
-        f"Iniciando revisión crítica de evidencia y jerarquización por nivel de estudio...",
-        "search"
-    ))
 
     papers_to_review = final_papers[:8]
     papers_json_str = json.dumps([{
@@ -909,7 +816,7 @@ Traspaso formal al **AGENTE 3 — REVISOR CRÍTICO** con los resultados recupera
         "journal": p["journal"],
         "year": p["year"],
         "doi": p["doi"],
-        "abstract": (p.get("abstract") or "")[:150],
+        "abstract": (p.get("abstract") or "")[:500],
     } for p in papers_to_review], ensure_ascii=False)
 
     prompt_agente3 = f"""
