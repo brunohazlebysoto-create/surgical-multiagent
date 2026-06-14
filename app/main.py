@@ -157,15 +157,20 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
             await event_queue.put({
                 "agent": "Sistema", "role": "Extractor",
                 "color": "#a855f7", "icon": "📥", "stage": "analyze",
-                "content": "Buscando y descargando figuras/gráficos de PubMed Central para los papers seleccionados..."
+                "content": f"Descargando figuras de PubMed Central para {len(selected_papers)} papers seleccionados..."
             })
             for paper in selected_papers:
                 doi = paper.get("doi")
                 if doi and not doi.startswith("user_upload_"):
                     try:
-                        pmc_figs = await download_pmc_figures(doi, run_id)
+                        pmc_figs = await asyncio.wait_for(
+                            download_pmc_figures(doi, run_id),
+                            timeout=8.0
+                        )
                         if pmc_figs:
                             global_runs[run_id]["extracted_images"].extend(pmc_figs)
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Timeout descargando figuras PMC para {doi}. Continuando.")
                     except Exception as e:
                         logger.error(f"Error descargando figuras PMC para {doi}: {e}")
             
@@ -173,7 +178,7 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
         await event_queue.put({
             "agent": "Sistema", "role": "Configurador",
             "color": "#a855f7", "icon": "⚙️", "stage": "output_format_required",
-            "content": "Figuras procesadas. Antes de iniciar el análisis, elige el formato de salida y la extensión del documento.",
+            "content": f"✅ {len(selected_papers)} papers confirmados. **Elige el formato de salida** (Word, PowerPoint o ambos) y la extensión del documento para iniciar el análisis completo.",
             "papers_count": len(selected_papers)
         })
         logger.info(f"Pipeline {run_id} esperando configuración de formato.")
