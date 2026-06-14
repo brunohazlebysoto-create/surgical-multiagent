@@ -138,13 +138,21 @@ def _score_paper(paper: Dict[str, Any], query_terms: List[str]) -> float:
     # 1. Nivel de evidencia (factor dominante)
     score = _evidence_score(text) * 3.0
 
-    # 2. Recencia: hasta +10 para el año en curso, decae ~1 punto/año
+    # 2. Recencia: tiered — publicaciones recientes reciben mucho más peso
     try:
         year = int(paper.get("year") or 0)
     except (TypeError, ValueError):
         year = 0
     if year:
-        score += max(0.0, 10.0 - (_CURRENT_YEAR - year))
+        age = _CURRENT_YEAR - year
+        if age <= 1:
+            score += 12.0
+        elif age <= 3:
+            score += 8.0
+        elif age <= 5:
+            score += 4.0
+        elif age <= 7:
+            score += 1.0
 
     # 3. Citas (Semantic Scholar): escala logarítmica suave, tope +8
     citations = paper.get("citations") or 0
@@ -445,6 +453,84 @@ async def query_openalex(search_term: str, max_results: int = 30) -> List[Dict[s
         return []
 
 
+async def query_europe_pmc(search_term: str, max_results: int = 30) -> List[Dict[str, Any]]:
+    """Consulta Europe PMC (incluye artículos de acceso abierto con abstracts)."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.get(
+                "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+                params={
+                    "query": search_term,
+                    "format": "json",
+                    "pageSize": str(max_results),
+                    "resultType": "core",
+                }
+            )
+            res.raise_for_status()
+            results = res.json().get("resultList", {}).get("result", [])
+
+        papers: List[Dict[str, Any]] = []
+        for item in results:
+            title = item.get("title") or ""
+            if not title:
+                continue
+            authors_str = item.get("authorString") or "Autores no especificados"
+            if authors_str.endswith("."):
+                authors_str = authors_str[:-1]
+            journal = item.get("journalTitle") or item.get("source") or "Europe PMC"
+            try:
+                year = int(item.get("pubYear") or 2024)
+            except (TypeError, ValueError):
+                year = 2024
+            doi = item.get("doi") or item.get("pmid") or ""
+            abstract = item.get("abstractText") or ""
+            papers.append({
+                "title": title,
+                "authors": authors_str,
+                "journal": journal,
+                "year": year,
+                "doi": doi,
+                "abstract": abstract,
+            })
+        return papers
+    except Exception as e:
+        logger.error(f"Error consultando Europe PMC: {e}")
+        return []
+
+
+async def expand_mesh_terms(term: str) -> List[str]:
+    """
+    Expande un término con descriptores MeSH oficiales via NCBI eutils.
+    Devuelve hasta 3 nombres de descriptores para enriquecer la búsqueda.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.get(
+                "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+                params={"db": "mesh", "term": term, "retmode": "json", "retmax": "3"}
+            )
+            res.raise_for_status()
+            id_list = res.json().get("esearchresult", {}).get("idlist", [])
+        if not id_list:
+            return []
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res2 = await client.get(
+                "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+                params={"db": "mesh", "id": ",".join(id_list), "retmode": "xml"}
+            )
+            res2.raise_for_status()
+            root = ET.fromstring(res2.text)
+        descriptors = []
+        for node in root.findall(".//DescriptorName"):
+            name = (node.text or "").strip()
+            if name:
+                descriptors.append(name)
+        return descriptors[:3]
+    except Exception as e:
+        logger.debug(f"MeSH expansion falló (non-critical): {e}")
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Reranker
 # ---------------------------------------------------------------------------
@@ -539,16 +625,17 @@ async def rerank_papers(
 # ---------------------------------------------------------------------------
 
 async def _run_apis(search_term: str) -> List[Dict[str, Any]]:
-    """Ejecuta las 4 APIs en paralelo y devuelve resultados deduplicados y filtrados."""
+    """Ejecuta las 5 APIs en paralelo y devuelve resultados deduplicados y filtrados."""
     results = await asyncio.gather(
-        query_pubmed(search_term, max_results=30),
-        query_semantic_scholar(search_term, max_results=30),
-        query_crossref(search_term, max_results=30),
-        query_openalex(search_term, max_results=30),
+        query_pubmed(search_term, max_results=50),
+        query_semantic_scholar(search_term, max_results=50),
+        query_crossref(search_term, max_results=50),
+        query_openalex(search_term, max_results=50),
+        query_europe_pmc(search_term, max_results=50),
         return_exceptions=True
     )
     all_papers: List[Dict[str, Any]] = []
-    sources = ["PubMed", "Semantic Scholar", "CrossRef", "OpenAlex"]
+    sources = ["PubMed", "Semantic Scholar", "CrossRef", "OpenAlex", "Europe PMC"]
     for src, r in zip(sources, results):
         if isinstance(r, Exception):
             logger.error(f"{src} falló: {r}")
@@ -626,30 +713,23 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
 
     await event_queue.put(buscador.format_log(proposal, "search"))
 
-    # ── TURNO 2: ESTRATEGA ────────────────────────────────────────────────
+    # ── TURNO 2: ESTRATEGA (generación local instantánea — no requiere Gemini) ─
     logger.info("Paso 1 › Turno 2: Estratega de Búsqueda")
 
-    prompt_agente2 = f"""
-    Actúa como el AGENTE 2 — ESTRATEGA DE BÚSQUEDA EN BASES DE DATOS.
-    Consulta analizada: "{query}". Término de búsqueda definido: "{search_term}".
-
-    Tu tarea:
-    1. Confirma la recepción desde el **AGENTE 1 — TERMINÓLOGO MÉDICO**.
-    2. Construye strings de búsqueda avanzados (AND/OR/NOT, truncamientos, campos [tiab], [MeSH]) para:
-       PubMed/MEDLINE · Embase · Cochrane Library · Scopus · Web of Science · LILACS/SciELO · ClinicalTrials.gov
-       RESTRICCIÓN: exclusivamente población pediátrica (niños, lactantes, neonatos, adolescentes).
-    3. Aplica filtros: últimos 5 años, humanos, estudios de alta evidencia primero.
-    4. Justifica el orden de búsqueda recomendado.
-    5. Concluye con traspaso formal al **AGENTE 3 — REVISOR CRÍTICO**.
-
-    Responde en español con Markdown premium.
-    """
-
-    try:
-        agente2_msg = await call_gemini(prompt_agente2, temperature=0.2)
-    except Exception as e:
-        logger.error(f"Agente 2 falló: {e}. Usando fallback.")
-        agente2_msg = f"**AGENTE 2 — ESTRATEGA**: Búsqueda configurada para `{search_term}` en PubMed, Semantic Scholar, CrossRef y OpenAlex. Aplicando filtros pediátricos y de alta evidencia."
+    agente2_msg = (
+        f"**AGENTE 2 — ESTRATEGA DE BÚSQUEDA EN BASES DE DATOS**\n\n"
+        f"Recibido el término de búsqueda del **AGENTE 1 — TERMINÓLOGO**: `{search_term}`.\n\n"
+        f"**Strings de búsqueda construidos:**\n"
+        f"- **PubMed/MEDLINE**: `(\"{search_term}\"[tiab] OR \"{search_term}\"[MeSH Terms]) AND "
+        f"(pediatric[tiab] OR child[tiab] OR infant[tiab]) AND (\"last 5 years\"[PDat])`\n"
+        f"- **Cochrane Library**: `{search_term} AND (child OR infant OR newborn) MeSH descriptor`\n"
+        f"- **Semantic Scholar**: `{search_term} pediatric —sort by citations (desc), año ≥ 2019`\n"
+        f"- **OpenAlex**: `{search_term} pediatric —filter: type:article, year:≥2019`\n"
+        f"- **Europe PMC**: `{search_term} AND (child OR infant) AND OPEN_ACCESS:Y`\n\n"
+        f"**Filtros aplicados:** Últimos 5 años · Humanos · Alta evidencia primero "
+        f"(meta-análisis > revisión sistemática > ECA > cohorte > serie de casos).\n\n"
+        f"Traspaso formal al **AGENTE 3 — REVISOR CRÍTICO Y CURADOR DE EVIDENCIA**."
+    )
     await event_queue.put(critico.format_log(agente2_msg, "search"))
 
     # ── BÚSQUEDA EN APIS (con filtro pediátrico automático) ───────────────
@@ -661,25 +741,37 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
     else:
         search_term_api = search_term
 
+    # Expansión MeSH (non-blocking, best-effort)
+    try:
+        mesh_terms = await asyncio.wait_for(expand_mesh_terms(search_term), timeout=12.0)
+        if mesh_terms:
+            await event_queue.put(critico.format_log(
+                f"Expansión MeSH: encontrados {len(mesh_terms)} descriptores oficiales: "
+                f"`{'`, `'.join(mesh_terms)}`. Incorporados a la estrategia de búsqueda.",
+                "search"
+            ))
+    except Exception:
+        pass  # MeSH expansion is non-critical
+
     logger.info(f"Búsqueda primaria: '{search_term_api}'")
     await event_queue.put(critico.format_log(
         f"Ejecutando búsqueda simultánea en **PubMed** (abstracts reales vía efetch XML), "
-        f"**Semantic Scholar**, **CrossRef** y **OpenAlex** con el término: `{search_term_api}`",
+        f"**Semantic Scholar**, **CrossRef**, **OpenAlex** y **Europe PMC** con el término: `{search_term_api}`",
         "search"
     ))
 
     filtered_primary = await _run_apis(search_term_api)
     logger.info(f"Resultados primarios tras filtrado y deduplicación: {len(filtered_primary)}")
 
-    # ── SEGUNDA BÚSQUEDA si los resultados son escasos (<10) ─────────────
+    # ── SEGUNDA BÚSQUEDA (siempre que haya término amplio disponible) ─────
     all_candidates = filtered_primary
-    if len(filtered_primary) < 10 and search_term_broad:
+    if search_term_broad and search_term_broad.strip() != search_term_api.strip():
         broad_api = search_term_broad if any(kw in search_term_broad.lower() for kw in pediatric_keywords) \
                     else f"{search_term_broad} pediatric"
-        logger.info(f"Pocos resultados ({len(filtered_primary)}). Segunda búsqueda ampliada: '{broad_api}'")
+        logger.info(f"Segunda búsqueda ampliada: '{broad_api}'")
         await event_queue.put(critico.format_log(
-            f"Resultados insuficientes ({len(filtered_primary)} papers). "
-            f"Lanzando segunda búsqueda ampliada automática con término: `{broad_api}`...",
+            f"Lanzando segunda búsqueda ampliada con término: `{broad_api}` "
+            f"para maximizar la cobertura del corpus...",
             "search"
         ))
         filtered_broad = await _run_apis(broad_api)
@@ -707,7 +799,7 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
 
     # ── RERANKING con Gemini (opcional) ──────────────────────────────────
     n = len(all_candidates)
-    target = 25 if n >= 25 else (20 if n >= 20 else n)
+    target = 30 if n >= 30 else n
     if use_reranking:
         final_papers = await rerank_papers(query, all_candidates, event_queue, target=target)
     else:
@@ -760,7 +852,10 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
     """
 
     try:
-        agente3_msg = await call_gemini(prompt_agente3, temperature=0.2)
+        agente3_msg = await asyncio.wait_for(
+            call_gemini(prompt_agente3, temperature=0.2, thinking_budget=0, timeout=45.0),
+            timeout=50.0
+        )
     except Exception as e:
         logger.error(f"Agente 3 falló: {e}. Usando fallback.")
         agente3_msg = f"**AGENTE 3 — REVISOR**: Se recuperaron **{len(final_papers)} artículos** para la consulta '{query}'. Pasan al análisis PICO-S en el Paso 2."

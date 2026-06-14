@@ -6,6 +6,21 @@ from app.agents.base import BaseAgent, call_gemini
 
 logger = logging.getLogger("multiagent_analyzer")
 
+
+def _safe_int(val):
+    try:
+        return int(val) if val is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_float(val):
+    try:
+        return float(val) if val is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 class ExtractorAgent(BaseAgent):
     def __init__(self):
         super().__init__(
@@ -75,12 +90,17 @@ async def run_analyzer_panel(papers: List[Dict[str, Any]], event_queue: asyncio.
           "oxford_level": "...",
           "methodological_quality": 3,
           "study_type": "...",
-          "age_groups": ["..."]
+          "age_groups": ["..."],
+          "n_patients": null,
+          "mean_age_months": null,
+          "complication_rate_pct": null,
+          "operative_time_min": null,
+          "confidence_interval": null
         }},
         ...
       ]
     }}
-    
+
     Claves obligatorias para cada análisis en el arreglo:
     - "id": El id correspondiente al artículo (0, 1, 2, ...).
     - "population": Pacientes (edad, diagnóstico, tamaño de muestra).
@@ -92,6 +112,11 @@ async def run_analyzer_panel(papers: List[Dict[str, Any]], event_queue: asyncio.
     - "methodological_quality": Puntuación numérica de calidad del 1 al 5 (entero).
     - "study_type": Tipo de estudio.
     - "age_groups": Lista de grupos etarios involucrados ("neonato", "lactante", "preescolar", "escolar", "adolescente").
+    - "n_patients": Número total de pacientes en el estudio (entero) o null si no está disponible.
+    - "mean_age_months": Edad media de los pacientes en meses (número) o null.
+    - "complication_rate_pct": Tasa de complicaciones en % (número) o null.
+    - "operative_time_min": Tiempo operatorio medio en minutos (número) o null.
+    - "confidence_interval": Intervalo de confianza principal reportado (texto, ej. "95% CI 0.45-0.87") o null.
     """
     
     analyzed_papers = []
@@ -125,7 +150,14 @@ async def run_analyzer_panel(papers: List[Dict[str, Any]], event_queue: asyncio.
                 "oxford_level": analysis.get("oxford_level") or "4",
                 "methodological_quality": quality,
                 "study_type": analysis.get("study_type") or "Estudio Retrospectivo",
-                "age_groups": analysis.get("age_groups") or ["lactante"]
+                "age_groups": analysis.get("age_groups") or ["lactante"],
+                "numeric_data": {
+                    "n_patients": _safe_int(analysis.get("n_patients")),
+                    "mean_age_months": _safe_float(analysis.get("mean_age_months")),
+                    "complication_rate_pct": _safe_float(analysis.get("complication_rate_pct")),
+                    "operative_time_min": _safe_float(analysis.get("operative_time_min")),
+                    "confidence_interval": analysis.get("confidence_interval") or None,
+                }
             })
     except Exception as e:
         logger.error(f"Error en extracción batched: {e}. Usando fallback seguro para cada paper.")
@@ -147,7 +179,12 @@ async def run_analyzer_panel(papers: List[Dict[str, Any]], event_queue: asyncio.
                 "oxford_level": "4",
                 "methodological_quality": 3,
                 "study_type": "Estudio Retrospectivo",
-                "age_groups": ["lactante", "escolar"]
+                "age_groups": ["lactante", "escolar"],
+                "numeric_data": {
+                    "n_patients": None, "mean_age_months": None,
+                    "complication_rate_pct": None, "operative_time_min": None,
+                    "confidence_interval": None,
+                }
             })
 
     # 2. Resumir la distribución de estudios
