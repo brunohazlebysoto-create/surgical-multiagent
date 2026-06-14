@@ -667,10 +667,10 @@ async def query_guidelines(search_term: str) -> List[Dict[str, Any]]:
 async def _run_apis(search_term: str) -> List[Dict[str, Any]]:
     """Ejecuta las 4 APIs en paralelo y devuelve resultados deduplicados y filtrados."""
     results = await asyncio.gather(
-        query_pubmed(search_term, max_results=30),
-        query_semantic_scholar(search_term, max_results=30),
-        query_crossref(search_term, max_results=30),
-        query_openalex(search_term, max_results=30),
+        query_pubmed(search_term, max_results=50),
+        query_semantic_scholar(search_term, max_results=50),
+        query_crossref(search_term, max_results=50),
+        query_openalex(search_term, max_results=50),
         return_exceptions=True
     )
     all_papers: List[Dict[str, Any]] = []
@@ -847,8 +847,8 @@ Traspaso formal al **AGENTE 3 — REVISOR CRÍTICO** con los resultados recupera
                 existing_dois.add(doi_key)
             existing_titles.add(title_key)
 
-    # ── SEGUNDA BÚSQUEDA si los resultados son escasos (<10) ─────────────
-    if len(filtered_primary) < 10 and search_term_broad:
+    # ── SEGUNDA BÚSQUEDA con término amplio (siempre, para maximizar cobertura) ─
+    if search_term_broad and search_term_broad.strip() != search_term_api.strip():
         broad_api = search_term_broad if any(kw in search_term_broad.lower() for kw in pediatric_keywords) \
                     else f"{search_term_broad} pediatric"
         logger.info(f"Pocos resultados ({len(filtered_primary)}). Segunda búsqueda ampliada: '{broad_api}'")
@@ -887,7 +887,7 @@ Traspaso formal al **AGENTE 3 — REVISOR CRÍTICO** con los resultados recupera
 
     # ── RERANKING con Gemini (opcional) ──────────────────────────────────
     n = len(all_candidates)
-    target = 25 if n >= 25 else (20 if n >= 20 else n)
+    target = 30 if n >= 30 else n
     if use_reranking:
         final_papers = await rerank_papers(query, all_candidates, event_queue, target=target)
     else:
