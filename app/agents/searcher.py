@@ -946,8 +946,8 @@ Traspaso formal al **AGENTE 3 — REVISOR CRÍTICO** con los resultados recupera
 
     try:
         agente3_msg = await asyncio.wait_for(
-            call_gemini(prompt_agente3, temperature=0.2, thinking_budget=2048, timeout=90.0),
-            timeout=100.0
+            call_gemini(prompt_agente3, temperature=0.2, thinking_budget=0, timeout=45.0),
+            timeout=50.0
         )
     except Exception as e:
         logger.error(f"Agente 3 falló: {e}. Usando fallback.")
