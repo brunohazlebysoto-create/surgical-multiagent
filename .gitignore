@@ -19,6 +19,9 @@ env/
 .vscode/
 .idea/
 
+# Claude Code internal directory
+.claude/
+
 # Application generated files
 static/downloads/*
 static/uploads/*
