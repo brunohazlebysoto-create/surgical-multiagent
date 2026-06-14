@@ -54,23 +54,21 @@ async def run_meta_analyst_panel(
         "meta_analyze"
     ))
 
-    # Formatear el corpus analizado incluyendo autores, revista y DOI para citas correctas
+    # Corpus compacto: solo los campos esenciales para síntesis GRADE (sin abstractos largos)
     corpus_str = ""
     for i, p in enumerate(analyzed_papers):
-        abstract_excerpt = (p.get("abstract") or "").strip()
-        abstract_line = (
-            f"\n        Extracto: {abstract_excerpt[:150]}"
-            if abstract_excerpt else ""
+        nd = p.get("numeric_data") or {}
+        numeric_line = ", ".join(filter(None, [
+            f"N={nd['n_patients']}" if nd.get("n_patients") else None,
+            f"compl.{nd['complication_rate_pct']}%" if nd.get("complication_rate_pct") is not None else None,
+            f"T.op.{nd['operative_time_min']}min" if nd.get("operative_time_min") is not None else None,
+        ]))
+        corpus_str += (
+            f"[{i+1}] {p.get('authors','N/A')} ({p['year']}). \"{p['title'][:80]}\". "
+            f"{p['study_type']} | Oxford:{p['oxford_level']} | Cal:{p['methodological_quality']}/5"
+            + (f" | {numeric_line}" if numeric_line else "") + "\n"
+            f"    I:{p['picos']['I'][:80]} → O:{p['picos']['O'][:100]}\n"
         )
-        corpus_str += f"""
-        Estudio {i+1}: {p.get('authors', 'N/A')}. "{p['title']}". {p.get('journal', 'N/A')}. {p['year']}. DOI: {p.get('doi', 'N/A')}.
-        Tipo: {p['study_type']} | Nivel Oxford: {p['oxford_level']} | Calidad: {p['methodological_quality']}/5
-        P: {p['picos']['P']}
-        I: {p['picos']['I']}
-        C: {p['picos']['C']}
-        O: {p['picos']['O']}{abstract_line}
-        ---
-        """
 
     prompt_consolidated = f"""
     Eres el coordinador del panel de meta-análisis. Genera el debate clínico entre el Sintetizador
@@ -98,17 +96,19 @@ async def run_meta_analyst_panel(
        - "controversies": Lista de controversias citando los estudios en conflicto.
        - "clinical_implications": Recomendaciones prácticas citando la evidencia de respaldo.
        - "evidence_range_years": Objeto con "min" y "max" (enteros) del rango de años de los estudios.
+       - "numerical_facts": Lista de objetos {"fact":"...", "value":"...", "citation":"Autor et al., Año"}
+         con las 5-8 cifras numéricas más relevantes del corpus (tasas, tiempos, n de pacientes).
 
     Devuelve un JSON exacto con las claves raíz: "synthesizer_log", "bias_opponent_log", "meta_analysis".
     El objeto "meta_analysis" debe contener: "global_evidence_level", "grade_recommendation",
     "comparison_findings", "knowledge_gaps", "controversies", "clinical_implications",
-    "evidence_range_years".
+    "evidence_range_years", "numerical_facts".
     """
     
     try:
         response_text = await asyncio.wait_for(
-            call_gemini(prompt_consolidated, json_mode=True, temperature=0.2, thinking_budget=8192, timeout=210.0, max_output_tokens=16384),
-            timeout=230.0
+            call_gemini(prompt_consolidated, json_mode=True, temperature=0.2, thinking_budget=4096, timeout=150.0, max_output_tokens=8192),
+            timeout=165.0
         )
         data = json.loads(response_text)
         
@@ -120,9 +120,9 @@ async def run_meta_analyst_panel(
         required_keys = [
             "global_evidence_level", "grade_recommendation", "comparison_findings",
             "knowledge_gaps", "controversies", "clinical_implications",
-            "evidence_range_years"
+            "numerical_facts", "evidence_range_years"
         ]
-        list_keys = ("knowledge_gaps", "controversies")
+        list_keys = ("knowledge_gaps", "controversies", "numerical_facts")
         for rk in required_keys:
             if rk not in final_meta:
                 if rk in list_keys:
@@ -149,6 +149,7 @@ async def run_meta_analyst_panel(
             "knowledge_gaps": ["Falta de seguimiento prospectivo a largo plazo (>5 años)"],
             "controversies": ["La curva de aprendizaje y costes del cirujano"],
             "clinical_implications": "Se recomienda personalizar la decisión según la anatomía del paciente y experiencia del centro.",
+            "numerical_facts": [],
             "evidence_range_years": {
                 "min": min(years) if years else 2000,
                 "max": max(years) if years else 2024
