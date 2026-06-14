@@ -404,6 +404,7 @@ input[type="text"]:focus {
     border-radius: 12px;
     padding: 20px;
     overflow-y: auto;
+    overflow-x: hidden;
     max-height: 430px;
     display: flex;
     flex-direction: column;
@@ -452,9 +453,11 @@ input[type="text"]:focus {
     border-radius: 12px;
     border: 1px solid rgba(255, 255, 255, 0.05);
     background-color: rgba(255, 255, 255, 0.01);
-    max-width: 90%;
+    max-width: 100%;
+    width: 100%;
     align-self: flex-start;
     animation: bubble-fade-in 0.3s ease-out forwards;
+    box-sizing: border-box;
 }
 
 @keyframes bubble-fade-in {
@@ -468,6 +471,8 @@ input[type="text"]:focus {
     gap: 10px;
     margin-bottom: 8px;
     font-family: var(--font-heading);
+    flex-wrap: wrap;
+    min-width: 0;
 }
 
 .agent-icon-badge {
@@ -498,6 +503,9 @@ input[type="text"]:focus {
     font-size: 13px;
     color: var(--text-primary);
     white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    min-width: 0;
 }
 
 /* Específico para el Sistema (Render/Completado) */
