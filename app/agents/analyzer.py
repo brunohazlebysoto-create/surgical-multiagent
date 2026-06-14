@@ -140,51 +140,107 @@ async def run_analyzer_panel(papers: List[Dict[str, Any]], event_queue: asyncio.
             }
         }
 
-    # 1. Dividir papers en 2 lotes paralelos (máx 15 c/u) para evitar que el JSON de salida
-    #    supere el límite de tokens y provoque truncación/reintentos interminables.
+    # 1. Dividir papers en 2 lotes secuenciales con mensajes de progreso entre ellos.
+    #    Secuencial > paralelo: el usuario ve actividad cada ~55s en lugar de silencio durante 2min.
     mid = len(papers) // 2
-    slice_a = [{
-        "id": idx,
-        "title": p["title"],
-        "authors": p["authors"],
-        "journal": p["journal"],
-        "year": p["year"],
-        "abstract": (p.get("abstract") or "")[:400]
-    } for idx, p in enumerate(papers[:mid])]
+    slices = [papers[:mid], papers[mid:]]
 
-    slice_b = [{
-        "id": mid + idx,
-        "title": p["title"],
-        "authors": p["authors"],
-        "journal": p["journal"],
-        "year": p["year"],
-        "abstract": (p.get("abstract") or "")[:400]
-    } for idx, p in enumerate(papers[mid:])]
-
-    await event_queue.put(extractor.format_log(
-        f"Dividiendo {len(papers)} papers en 2 lotes paralelos ({len(slice_a)} + {len(slice_b)}) para extracción PICO-S simultánea...",
-        "analyze"
-    ))
-
-    async def _run_batch(subset: list, offset: int):
+    async def _run_batch(subset: list, offset: int, label: str) -> list:
+        input_data = [{
+            "id": offset + idx,
+            "title": p["title"][:80],
+            "authors": p["authors"][:60],
+            "year": p["year"],
+            "abstract": (p.get("abstract") or "")[:200]
+        } for idx, p in enumerate(subset)]
+        prompt = (
+            'Analiza ' + str(len(subset)) + ' artículos quirúrgicos pediátricos.\n'
+            'Lista:\n' + json.dumps(input_data, ensure_ascii=False) + '\n\n'
+            'Devuelve JSON con clave "analyses": array de objetos con:\n'
+            '"id", "population" (breve), "intervention" (breve), "comparison" (breve),\n'
+            '"outcome" (breve), "setting" (breve),\n'
+            '"oxford_level" ("1a"/"1b"/"2a"/"2b"/"3"/"4"/"5"),\n'
+            '"methodological_quality" (1-5), "study_type",\n'
+            '"age_groups" (array), "n_patients" (int/null),\n'
+            '"mean_age_months" (float/null), "complication_rate_pct" (float/null),\n'
+            '"operative_time_min" (float/null), "confidence_interval" (str/null).\n'
+        )
         try:
             resp = await asyncio.wait_for(
-                call_gemini(_build_picos_prompt(subset), json_mode=True,
-                            temperature=0.1, thinking_budget=0,
-                            timeout=110.0, max_output_tokens=8192),
-                timeout=125.0
+                call_gemini(prompt, json_mode=True, temperature=0.1,
+                            thinking_budget=0, timeout=55.0, max_output_tokens=6144),
+                timeout=70.0
             )
-            return _parse_analyses(json.loads(resp), papers[offset:offset + len(subset)], offset)
+            batch_data = json.loads(resp)
+            analyses_map = {a["id"]: a for a in batch_data.get("analyses", [])}
+            result = []
+            for local_idx, p in enumerate(subset):
+                gid = offset + local_idx
+                a = analyses_map.get(gid, {})
+                raw_q = a.get("methodological_quality", 3)
+                try:
+                    quality = max(1, min(5, int(raw_q)))
+                except (TypeError, ValueError):
+                    quality = 3
+                result.append({
+                    "title": p.get("title", "Sin título"),
+                    "authors": p.get("authors", "Autores N/A"),
+                    "journal": p.get("journal", "Revista N/A"),
+                    "year": p.get("year", 2024),
+                    "doi": p.get("doi", ""),
+                    "abstract": p.get("abstract", ""),
+                    "picos": {
+                        "P": a.get("population") or "Población infantil",
+                        "I": a.get("intervention") or "Intervención quirúrgica",
+                        "C": a.get("comparison") or "Tratamiento alternativo",
+                        "O": a.get("outcome") or "Resultados clínicos postoperatorios",
+                        "S": a.get("setting") or "Hospital pediátrico"
+                    },
+                    "oxford_level": a.get("oxford_level") or "4",
+                    "methodological_quality": quality,
+                    "study_type": a.get("study_type") or "Estudio Retrospectivo",
+                    "age_groups": a.get("age_groups") or ["lactante"],
+                    "numeric_data": {
+                        "n_patients": _safe_int(a.get("n_patients")),
+                        "mean_age_months": _safe_float(a.get("mean_age_months")),
+                        "complication_rate_pct": _safe_float(a.get("complication_rate_pct")),
+                        "operative_time_min": _safe_float(a.get("operative_time_min")),
+                        "confidence_interval": a.get("confidence_interval") or None,
+                    }
+                })
+            return result
         except Exception as e:
-            logger.error(f"Error lote PICO-S offset={offset}: {e}. Usando fallback.")
-            return [_fallback_paper(p) for p in papers[offset:offset + len(subset)]]
+            logger.error(f"Error PICO-S {label}: {e}. Fallback.")
+            return [{
+                "title": p.get("title", "Sin título"),
+                "authors": p.get("authors", "Autores N/A"),
+                "journal": p.get("journal", "Revista N/A"),
+                "year": p.get("year", 2024),
+                "doi": p.get("doi", ""),
+                "abstract": p.get("abstract", ""),
+                "picos": {"P": "Población infantil", "I": "Intervención quirúrgica",
+                          "C": "Tratamiento alternativo", "O": "Resultados clínicos postoperatorios",
+                          "S": "Hospital pediátrico"},
+                "oxford_level": "4", "methodological_quality": 3,
+                "study_type": "Estudio Retrospectivo", "age_groups": ["lactante", "escolar"],
+                "numeric_data": {"n_patients": None, "mean_age_months": None,
+                                 "complication_rate_pct": None, "operative_time_min": None,
+                                 "confidence_interval": None}
+            } for p in subset]
 
-    results = await asyncio.gather(
-        _run_batch(slice_a, 0),
-        _run_batch(slice_b, mid),
-        return_exceptions=False
-    )
-    analyzed_papers = results[0] + results[1]
+    analyzed_papers = []
+    for batch_idx, (subset, offset) in enumerate([(slices[0], 0), (slices[1], mid)]):
+        label = f"Lote {batch_idx + 1}/2"
+        await event_queue.put(extractor.format_log(
+            f"Extrayendo PICO-S de {label}: {len(subset)} artículos (papers {offset + 1}–{offset + len(subset)})...",
+            "analyze"
+        ))
+        batch_result = await _run_batch(subset, offset, label)
+        analyzed_papers.extend(batch_result)
+        await event_queue.put(extractor.format_log(
+            f"{label} completado: {len(batch_result)} fichas PICO-S extraídas.",
+            "analyze"
+        ))
 
     # 2. Resumir la distribución de estudios
     study_types = {}
@@ -213,8 +269,8 @@ async def run_analyzer_panel(papers: List[Dict[str, Any]], event_queue: asyncio.
     """
     try:
         response_debate = await asyncio.wait_for(
-            call_gemini(prompt_debate, json_mode=True, temperature=0.3, thinking_budget=1024, timeout=90.0),
-            timeout=100.0
+            call_gemini(prompt_debate, json_mode=True, temperature=0.3, thinking_budget=0, timeout=60.0, max_output_tokens=2048),
+            timeout=70.0
         )
         debate_data = json.loads(response_debate)
         ext_msg = debate_data.get("extractor_log", "Análisis PICO-S completado.")

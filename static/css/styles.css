@@ -1546,8 +1546,8 @@ input[type="text"]:focus {
     border: 1px solid var(--border-color);
     border-radius: 10px;
     margin-bottom: 8px;
-    flex-wrap: nowrap;
-    overflow-x: auto;
+    flex-wrap: wrap;
+    overflow-x: hidden;
 }
 
 .step-progress-bar.visible {
