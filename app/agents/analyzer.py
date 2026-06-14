@@ -60,83 +60,33 @@ async def run_analyzer_panel(papers: List[Dict[str, Any]], event_queue: asyncio.
     logger.info("Iniciando Paso 2: Panel de Análisis PICO-S Optimizado")
     await event_queue.put(extractor.format_log("Recibido el lote consolidado de papers del Paso 1. Iniciando extracción PICO-S por lotes para optimizar la cuota de la API...", "analyze"))
     
-    # 1. Preparar entrada compacta para el procesamiento por lotes (Batch)
-    papers_input = [{
-        "id": idx,
-        "title": p["title"],
-        "authors": p["authors"],
-        "journal": p["journal"],
-        "year": p["year"],
-        "abstract": (p.get("abstract") or "")[:500]  # 500 chars es suficiente para PICO-S; full-text truncado evita prompt gigante
-    } for idx, p in enumerate(papers)]
-    
-    prompt_batch = f"""
-    Analiza la siguiente lista de {len(papers)} artículos científicos de cirugía pediátrica.
-    Para CADA artículo, extrae la información clínica en formato JSON.
-    
-    Lista de artículos:
-    {json.dumps(papers_input, ensure_ascii=False)}
-    
-    Devuelve un JSON con la estructura exacta:
-    {{
-      "analyses": [
-        {{
-          "id": 0,
-          "population": "...",
-          "intervention": "...",
-          "comparison": "...",
-          "outcome": "...",
-          "setting": "...",
-          "oxford_level": "...",
-          "methodological_quality": 3,
-          "study_type": "...",
-          "age_groups": ["..."],
-          "n_patients": null,
-          "mean_age_months": null,
-          "complication_rate_pct": null,
-          "operative_time_min": null,
-          "confidence_interval": null
-        }},
-        ...
-      ]
-    }}
-
-    Claves obligatorias para cada análisis en el arreglo:
-    - "id": El id correspondiente al artículo (0, 1, 2, ...).
-    - "population": Pacientes (edad, diagnóstico, tamaño de muestra).
-    - "intervention": Técnica quirúrgica o tratamiento principal evaluado.
-    - "comparison": Grupo de control o técnica alternativa comparada.
-    - "outcome": Hallazgos principales, diferencias de tiempos, complicaciones o éxitos.
-    - "setting": Contexto clínico.
-    - "oxford_level": Nivel de evidencia según Oxford CEBM ("1a", "1b", "2a", "2b", "3", "4", "5").
-    - "methodological_quality": Puntuación numérica de calidad del 1 al 5 (entero).
-    - "study_type": Tipo de estudio.
-    - "age_groups": Lista de grupos etarios involucrados ("neonato", "lactante", "preescolar", "escolar", "adolescente").
-    - "n_patients": Número total de pacientes en el estudio (entero) o null si no está disponible.
-    - "mean_age_months": Edad media de los pacientes en meses (número) o null.
-    - "complication_rate_pct": Tasa de complicaciones en % (número) o null.
-    - "operative_time_min": Tiempo operatorio medio en minutos (número) o null.
-    - "confidence_interval": Intervalo de confianza principal reportado (texto, ej. "95% CI 0.45-0.87") o null.
-    """
-    
-    analyzed_papers = []
-    try:
-        response_text = await asyncio.wait_for(
-            call_gemini(prompt_batch, json_mode=True, temperature=0.1, thinking_budget=0, timeout=120.0),
-            timeout=140.0
+    def _build_picos_prompt(subset: list) -> str:
+        return (
+            'Analiza la siguiente lista de ' + str(len(subset)) + ' artículos de cirugía pediátrica.\n'
+            'Para CADA artículo extrae la información clínica.\n\n'
+            'Lista:\n' + json.dumps(subset, ensure_ascii=False) + '\n\n'
+            'Devuelve un JSON con la clave "analyses" conteniendo un array de objetos con estas claves:\n'
+            '"id" (igual al del artículo), "population", "intervention", "comparison", "outcome",\n'
+            '"setting", "oxford_level" (Oxford CEBM: "1a","1b","2a","2b","3","4","5"),\n'
+            '"methodological_quality" (entero 1-5), "study_type",\n'
+            '"age_groups" (array de "neonato","lactante","preescolar","escolar","adolescente"),\n'
+            '"n_patients" (entero o null), "mean_age_months" (número o null),\n'
+            '"complication_rate_pct" (número o null), "operative_time_min" (número o null),\n'
+            '"confidence_interval" (texto o null).\n'
         )
-        batch_data = json.loads(response_text)
-        analyses_list = {a["id"]: a for a in batch_data.get("analyses", [])}
-        
-        for idx, p in enumerate(papers):
-            analysis = analyses_list.get(idx, {})
-            # Validar methodological_quality: debe ser int 1-5
+
+    def _parse_analyses(batch_json: dict, papers_slice: list, id_offset: int) -> list:
+        analyses_map = {a["id"]: a for a in batch_json.get("analyses", [])}
+        result = []
+        for local_idx, p in enumerate(papers_slice):
+            global_idx = id_offset + local_idx
+            analysis = analyses_map.get(global_idx, {})
             raw_quality = analysis.get("methodological_quality", 3)
             try:
                 quality = max(1, min(5, int(raw_quality)))
             except (TypeError, ValueError):
                 quality = 3
-            analyzed_papers.append({
+            result.append({
                 "title": p.get("title", "Sin título"),
                 "authors": p.get("authors", "Autores N/A"),
                 "journal": p.get("journal", "Revista N/A"),
@@ -162,33 +112,79 @@ async def run_analyzer_panel(papers: List[Dict[str, Any]], event_queue: asyncio.
                     "confidence_interval": analysis.get("confidence_interval") or None,
                 }
             })
-    except Exception as e:
-        logger.error(f"Error en extracción batched: {e}. Usando fallback seguro para cada paper.")
-        for p in papers:
-            analyzed_papers.append({
-                "title": p.get("title", "Sin título"),
-                "authors": p.get("authors", "Autores N/A"),
-                "journal": p.get("journal", "Revista N/A"),
-                "year": p.get("year", 2024),
-                "doi": p.get("doi", ""),
-                "abstract": p.get("abstract", ""),
-                "picos": {
-                    "P": "Población infantil",
-                    "I": "Intervención quirúrgica",
-                    "C": "Tratamiento alternativo",
-                    "O": "Resultados clínicos postoperatorios",
-                    "S": "Hospital pediátrico"
-                },
-                "oxford_level": "4",
-                "methodological_quality": 3,
-                "study_type": "Estudio Retrospectivo",
-                "age_groups": ["lactante", "escolar"],
-                "numeric_data": {
-                    "n_patients": None, "mean_age_months": None,
-                    "complication_rate_pct": None, "operative_time_min": None,
-                    "confidence_interval": None,
-                }
-            })
+        return result
+
+    def _fallback_paper(p: dict) -> dict:
+        return {
+            "title": p.get("title", "Sin título"),
+            "authors": p.get("authors", "Autores N/A"),
+            "journal": p.get("journal", "Revista N/A"),
+            "year": p.get("year", 2024),
+            "doi": p.get("doi", ""),
+            "abstract": p.get("abstract", ""),
+            "picos": {
+                "P": "Población infantil",
+                "I": "Intervención quirúrgica",
+                "C": "Tratamiento alternativo",
+                "O": "Resultados clínicos postoperatorios",
+                "S": "Hospital pediátrico"
+            },
+            "oxford_level": "4",
+            "methodological_quality": 3,
+            "study_type": "Estudio Retrospectivo",
+            "age_groups": ["lactante", "escolar"],
+            "numeric_data": {
+                "n_patients": None, "mean_age_months": None,
+                "complication_rate_pct": None, "operative_time_min": None,
+                "confidence_interval": None,
+            }
+        }
+
+    # 1. Dividir papers en 2 lotes paralelos (máx 15 c/u) para evitar que el JSON de salida
+    #    supere el límite de tokens y provoque truncación/reintentos interminables.
+    mid = len(papers) // 2
+    slice_a = [{
+        "id": idx,
+        "title": p["title"],
+        "authors": p["authors"],
+        "journal": p["journal"],
+        "year": p["year"],
+        "abstract": (p.get("abstract") or "")[:400]
+    } for idx, p in enumerate(papers[:mid])]
+
+    slice_b = [{
+        "id": mid + idx,
+        "title": p["title"],
+        "authors": p["authors"],
+        "journal": p["journal"],
+        "year": p["year"],
+        "abstract": (p.get("abstract") or "")[:400]
+    } for idx, p in enumerate(papers[mid:])]
+
+    await event_queue.put(extractor.format_log(
+        f"Dividiendo {len(papers)} papers en 2 lotes paralelos ({len(slice_a)} + {len(slice_b)}) para extracción PICO-S simultánea...",
+        "analyze"
+    ))
+
+    async def _run_batch(subset: list, offset: int):
+        try:
+            resp = await asyncio.wait_for(
+                call_gemini(_build_picos_prompt(subset), json_mode=True,
+                            temperature=0.1, thinking_budget=0,
+                            timeout=110.0, max_output_tokens=8192),
+                timeout=125.0
+            )
+            return _parse_analyses(json.loads(resp), papers[offset:offset + len(subset)], offset)
+        except Exception as e:
+            logger.error(f"Error lote PICO-S offset={offset}: {e}. Usando fallback.")
+            return [_fallback_paper(p) for p in papers[offset:offset + len(subset)]]
+
+    results = await asyncio.gather(
+        _run_batch(slice_a, 0),
+        _run_batch(slice_b, mid),
+        return_exceptions=False
+    )
+    analyzed_papers = results[0] + results[1]
 
     # 2. Resumir la distribución de estudios
     study_types = {}
