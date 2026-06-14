@@ -282,6 +282,105 @@ document.addEventListener("DOMContentLoaded", () => {
     let availablePapers = []; // Lista local de papers mostrados en el selector
     let selectedDois = new Set();
 
+    // --- WORKING TICKER ---
+    const stepProgressBar = document.getElementById("step-progress-bar");
+    let tickerInterval = null;
+    let lastMsgTime = null;
+    let currentStepLabel = "";
+
+    const STEP_LABELS = {
+        search: "Búsqueda",
+        analyze: "PICO-S",
+        meta_analyze: "GRADE",
+        write: "Redacción",
+        present: "Presentación",
+        render: "Compilando"
+    };
+
+    function startTicker(stepName) {
+        lastMsgTime = Date.now();
+        currentStepLabel = STEP_LABELS[stepName] || stepName;
+
+        if (tickerInterval) clearInterval(tickerInterval);
+        updateTickerEl();
+        tickerInterval = setInterval(updateTickerEl, 1000);
+    }
+
+    function stopTicker() {
+        if (tickerInterval) { clearInterval(tickerInterval); tickerInterval = null; }
+        const el = document.getElementById("working-ticker-el");
+        if (el) el.remove();
+    }
+
+    function updateTickerEl() {
+        const secs = Math.floor((Date.now() - lastMsgTime) / 1000);
+        let el = document.getElementById("working-ticker-el");
+        if (!el) {
+            el = document.createElement("div");
+            el.id = "working-ticker-el";
+            el.className = "working-ticker";
+            el.innerHTML = `
+                <div class="dots"><span></span><span></span><span></span></div>
+                <span class="ticker-step"></span>
+                <span class="ticker-time"></span>
+            `;
+            consoleStream.appendChild(el);
+        }
+        el.querySelector(".ticker-step").textContent = "Procesando " + currentStepLabel + "...";
+        const m = Math.floor(secs / 60);
+        const s = secs % 60;
+        el.querySelector(".ticker-time").textContent = m > 0
+            ? m + "m " + String(s).padStart(2, "0") + "s"
+            : secs + "s";
+        consoleStream.scrollTop = consoleStream.scrollHeight;
+    }
+
+    function updateStepPills(activeStage) {
+        const order = ["search", "analyze", "meta_analyze", "write", "present"];
+        const activeIdx = order.indexOf(activeStage);
+        order.forEach((s, i) => {
+            const pill = document.getElementById("spill-" + s);
+            if (!pill) return;
+            pill.classList.remove("active", "completed", "pending");
+            if (i < activeIdx) {
+                pill.classList.add("completed");
+                pill.querySelector("i").className = "fa-solid fa-check";
+            } else if (i === activeIdx) {
+                pill.classList.add("active");
+            } else {
+                pill.classList.add("pending");
+            }
+        });
+    }
+
+    function resetStepPills() {
+        const icons = {
+            search: "fa-magnifying-glass",
+            analyze: "fa-flask",
+            meta_analyze: "fa-chart-bar",
+            write: "fa-file-word",
+            present: "fa-presentation-screen"
+        };
+        ["search", "analyze", "meta_analyze", "write", "present"].forEach(s => {
+            const pill = document.getElementById("spill-" + s);
+            if (!pill) return;
+            pill.classList.remove("active", "completed");
+            pill.classList.add("pending");
+            pill.querySelector("i").className = "fa-solid " + icons[s];
+        });
+        stepProgressBar.classList.remove("visible");
+    }
+
+    function completeStepPills() {
+        ["search", "analyze", "meta_analyze", "write", "present"].forEach(s => {
+            const pill = document.getElementById("spill-" + s);
+            if (!pill) return;
+            pill.classList.remove("active", "pending");
+            pill.classList.add("completed");
+            pill.querySelector("i").className = "fa-solid fa-check";
+        });
+    }
+
     // --- Sugerencias Rápidas ---
     suggestionTags.forEach(tag => {
         tag.addEventListener("click", () => {
@@ -750,6 +849,8 @@ document.addEventListener("DOMContentLoaded", () => {
         // 1. Limpieza de UI
         clearConsole();
         resetPipelineNodes();
+        resetStepPills();
+        stopTicker();
         downloadsPanel.classList.add("hidden");
         updateApiQuotaVisual(100, "Salud: 100%", "normal");
         selectionPanel.classList.add("hidden");
@@ -828,9 +929,14 @@ document.addEventListener("DOMContentLoaded", () => {
         eventSource.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
-                
+
                 // Agregar burbuja de chat
                 addChatBubble(data);
+
+                // Resetear el ticker con cada mensaje nuevo
+                if (data.stage && !["completed", "failed", "selection_required", "output_format_required"].includes(data.stage)) {
+                    lastMsgTime = Date.now();
+                }
 
                 // Actualizar badge de sub-agente en tiempo real
                 if (data.agent) markSubAgent(data.agent, false);
@@ -838,6 +944,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 // Actualizar pipeline de nodos
                 if (data.stage && !["completed", "failed", "selection_required", "output_format_required"].includes(data.stage)) {
                     updatePipelineNodes(data.stage);
+                    // Mostrar barra de progreso y arrancar ticker
+                    stepProgressBar.classList.add("visible");
+                    updateStepPills(data.stage);
+                    startTicker(data.stage);
                     
                     // Actualizar círculo de cuota API
                     if (data.stage === "search") {
@@ -886,6 +996,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 // Si completó con éxito
                 if (data.stage === "completed") {
                     eventSource.close();
+                    stopTicker();
+                    completeStepPills();
                     completeAllPipelineNodes();
                     
                     connectionStatus.className = "status-badge completed";
@@ -904,6 +1016,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 // Si falló
                 if (data.stage === "failed") {
                     eventSource.close();
+                    stopTicker();
                     connectionStatus.className = "status-badge idle";
                     connectionStatus.querySelector(".status-text").innerText = "Fallo";
                     
@@ -926,6 +1039,7 @@ document.addEventListener("DOMContentLoaded", () => {
         eventSource.onerror = (err) => {
             console.error("Error de EventSource SSE:", err);
             eventSource.close();
+            stopTicker();
             resetControls();
         };
     }
@@ -1031,5 +1145,6 @@ document.addEventListener("DOMContentLoaded", () => {
     function resetControls() {
         startBtn.disabled = false;
         startBtn.innerHTML = `<i class="fa-solid fa-play"></i> Iniciar Consenso`;
+        stopTicker();
     }
 });
