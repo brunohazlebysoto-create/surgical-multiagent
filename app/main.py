@@ -151,28 +151,31 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
         if not selected_papers:
             selected_papers = all_available_papers[:15]
             
-        # Descargar figuras de PMC (si está habilitado en config)
+        # Descargar figuras de PMC en paralelo con tope global de 15s
         if cfg.get("pmc_download", True):
             from app.services.document_parser import download_pmc_figures
             await event_queue.put({
                 "agent": "Sistema", "role": "Extractor",
                 "color": "#a855f7", "icon": "📥", "stage": "analyze",
-                "content": f"Descargando figuras de PubMed Central para {len(selected_papers)} papers seleccionados..."
+                "content": f"Descargando figuras de PubMed Central para {len(selected_papers)} papers (paralelo)..."
             })
-            for paper in selected_papers:
-                doi = paper.get("doi")
-                if doi and not doi.startswith("user_upload_"):
-                    try:
-                        pmc_figs = await asyncio.wait_for(
-                            download_pmc_figures(doi, run_id),
-                            timeout=8.0
-                        )
-                        if pmc_figs:
-                            global_runs[run_id]["extracted_images"].extend(pmc_figs)
-                    except asyncio.TimeoutError:
-                        logger.warning(f"Timeout descargando figuras PMC para {doi}. Continuando.")
-                    except Exception as e:
-                        logger.error(f"Error descargando figuras PMC para {doi}: {e}")
+            async def _fetch_figs(doi):
+                try:
+                    return await asyncio.wait_for(download_pmc_figures(doi, run_id), timeout=8.0)
+                except Exception:
+                    return []
+            dois = [p.get("doi") for p in selected_papers
+                    if p.get("doi") and not p["doi"].startswith("user_upload_")]
+            try:
+                all_figs = await asyncio.wait_for(
+                    asyncio.gather(*[_fetch_figs(doi) for doi in dois]),
+                    timeout=15.0
+                )
+                for figs in all_figs:
+                    if figs:
+                        global_runs[run_id]["extracted_images"].extend(figs)
+            except Exception as e:
+                logger.warning(f"Descarga de figuras PMC completada parcialmente: {e}")
             
         # Preguntar al usuario formato de salida y longitud antes de generar
         await event_queue.put({
