@@ -54,58 +54,66 @@ async def run_meta_analyst_panel(
         "meta_analyze"
     ))
 
-    # Corpus compacto: solo los campos esenciales para síntesis GRADE (sin abstractos largos)
-    corpus_str = ""
-    for i, p in enumerate(analyzed_papers):
-        nd = p.get("numeric_data") or {}
-        numeric_line = ", ".join(filter(None, [
-            f"N={nd['n_patients']}" if nd.get("n_patients") else None,
-            f"compl.{nd['complication_rate_pct']}%" if nd.get("complication_rate_pct") is not None else None,
-            f"T.op.{nd['operative_time_min']}min" if nd.get("operative_time_min") is not None else None,
-        ]))
-        corpus_str += (
-            f"[{i+1}] {p.get('authors','N/A')} ({p['year']}). \"{p['title'][:80]}\". "
-            f"{p['study_type']} | Oxford:{p['oxford_level']} | Cal:{p['methodological_quality']}/5"
-            + (f" | {numeric_line}" if numeric_line else "") + "\n"
-            f"    I:{p['picos']['I'][:80]} → O:{p['picos']['O'][:100]}\n"
+    try:
+        # Corpus compacto: solo los campos esenciales para síntesis GRADE (sin abstractos largos)
+        corpus_str = ""
+        for i, p in enumerate(analyzed_papers):
+            nd = p.get("numeric_data") or {}
+            parts = []
+            if nd.get("n_patients"):
+                parts.append("N=" + str(nd["n_patients"]))
+            if nd.get("complication_rate_pct") is not None:
+                parts.append("compl." + str(nd["complication_rate_pct"]) + "%")
+            if nd.get("operative_time_min") is not None:
+                parts.append("T.op." + str(nd["operative_time_min"]) + "min")
+            numeric_line = ", ".join(parts)
+            title_safe = str(p.get("title", ""))[:80]
+            authors_safe = str(p.get("authors", "N/A"))
+            year_safe = str(p.get("year", "N/A"))
+            study_type_safe = str(p.get("study_type", "N/A"))
+            oxford_safe = str(p.get("oxford_level", "N/A"))
+            quality_safe = str(p.get("methodological_quality", "N/A"))
+            picos_i = str((p.get("picos") or {}).get("I", "N/A"))[:80]
+            picos_o = str((p.get("picos") or {}).get("O", "N/A"))[:100]
+            line = (
+                "[" + str(i+1) + "] " + authors_safe + " (" + year_safe + '). "' + title_safe + '". '
+                + study_type_safe + " | Oxford:" + oxford_safe + " | Cal:" + quality_safe + "/5"
+                + (" | " + numeric_line if numeric_line else "") + "\n"
+                + "    I:" + picos_i + " -> O:" + picos_o + "\n"
+            )
+            corpus_str += line
+
+        prompt_consolidated = (
+            'Eres el coordinador del panel de meta-análisis. Genera el debate clínico entre el Sintetizador\n'
+            'de Evidencia y el Opositor de Sesgos, y consolida la síntesis final de evidencia sobre "' + str(query) + '".\n\n'
+            'Corpus de estudios clínicos analizados (con autores completos para citación):\n'
+            + corpus_str + '\n'
+            'REGLA DE CITACIÓN: En todos los campos de texto, cita explícitamente a los autores de los estudios\n'
+            'del corpus usando el formato (Apellido et al., Año) o (Apellido, Año). Cada hallazgo clave debe\n'
+            'referenciar el estudio específico del que proviene.\n\n'
+            'Genera un resultado en formato JSON estricto con las siguientes claves:\n'
+            '1. "synthesizer_log": Diálogo del Sintetizador (140-180 palabras). Confirma fichas PICO-S del\n'
+            '   Paso 2, propone nivel GRADE preliminar con citas a 3-4 estudios del corpus, compara técnicas\n'
+            '   citando autores específicos, y pasa la palabra al Opositor.\n'
+            '2. "bias_opponent_log": Diálogo del Opositor (130-170 palabras). Cuestiona la propuesta citando\n'
+            '   limitaciones metodológicas de estudios concretos, indica gaps de conocimiento, y desafía el\n'
+            '   grado si los tamaños muestrales o diseños lo justifican.\n'
+            '3. "meta_analysis": Objeto con las claves de la síntesis formal:\n'
+            '   - "global_evidence_level": Nivel de evidencia global con referencia a los estudios del corpus.\n'
+            '   - "grade_recommendation": Grado GRADE definitivo (A/B/C/D) con justificación citando autores.\n'
+            '   - "comparison_findings": Comparación de técnicas con datos numéricos y citas (Autor et al., Año).\n'
+            '   - "knowledge_gaps": Lista de brechas de conocimiento con el estudio que las identifica.\n'
+            '   - "controversies": Lista de controversias citando los estudios en conflicto.\n'
+            '   - "clinical_implications": Recomendaciones prácticas citando la evidencia de respaldo.\n'
+            '   - "evidence_range_years": Objeto con "min" y "max" (enteros) del rango de años de los estudios.\n'
+            '   - "numerical_facts": Lista de objetos con claves "fact", "value", "citation" (Autor et al., Año)\n'
+            '     con las 5-8 cifras numéricas más relevantes del corpus (tasas, tiempos, n de pacientes).\n\n'
+            'Devuelve un JSON exacto con las claves raíz: "synthesizer_log", "bias_opponent_log", "meta_analysis".\n'
+            'El objeto "meta_analysis" debe contener: "global_evidence_level", "grade_recommendation",\n'
+            '"comparison_findings", "knowledge_gaps", "controversies", "clinical_implications",\n'
+            '"evidence_range_years", "numerical_facts".\n'
         )
 
-    prompt_consolidated = f"""
-    Eres el coordinador del panel de meta-análisis. Genera el debate clínico entre el Sintetizador
-    de Evidencia y el Opositor de Sesgos, y consolida la síntesis final de evidencia sobre "{query}".
-
-    Corpus de estudios clínicos analizados (con autores completos para citación):
-    {corpus_str}
-
-    REGLA DE CITACIÓN: En todos los campos de texto, cita explícitamente a los autores de los estudios
-    del corpus usando el formato (Apellido et al., Año) o (Apellido, Año). Cada hallazgo clave debe
-    referenciar el estudio específico del que proviene.
-
-    Genera un resultado en formato JSON estricto con las siguientes claves:
-    1. "synthesizer_log": Diálogo del Sintetizador (140-180 palabras). Confirma fichas PICO-S del
-       Paso 2, propone nivel GRADE preliminar con citas a 3-4 estudios del corpus, compara técnicas
-       citando autores específicos, y pasa la palabra al Opositor.
-    2. "bias_opponent_log": Diálogo del Opositor (130-170 palabras). Cuestiona la propuesta citando
-       limitaciones metodológicas de estudios concretos, indica gaps de conocimiento, y desafía el
-       grado si los tamaños muestrales o diseños lo justifican.
-    3. "meta_analysis": Objeto con las claves de la síntesis formal:
-       - "global_evidence_level": Nivel de evidencia global con referencia a los estudios del corpus.
-       - "grade_recommendation": Grado GRADE definitivo (A/B/C/D) con justificación citando autores.
-       - "comparison_findings": Comparación de técnicas con datos numéricos y citas (Autor et al., Año).
-       - "knowledge_gaps": Lista de brechas de conocimiento con el estudio que las identifica.
-       - "controversies": Lista de controversias citando los estudios en conflicto.
-       - "clinical_implications": Recomendaciones prácticas citando la evidencia de respaldo.
-       - "evidence_range_years": Objeto con "min" y "max" (enteros) del rango de años de los estudios.
-       - "numerical_facts": Lista de objetos {"fact":"...", "value":"...", "citation":"Autor et al., Año"}
-         con las 5-8 cifras numéricas más relevantes del corpus (tasas, tiempos, n de pacientes).
-
-    Devuelve un JSON exacto con las claves raíz: "synthesizer_log", "bias_opponent_log", "meta_analysis".
-    El objeto "meta_analysis" debe contener: "global_evidence_level", "grade_recommendation",
-    "comparison_findings", "knowledge_gaps", "controversies", "clinical_implications",
-    "evidence_range_years", "numerical_facts".
-    """
-    
-    try:
         response_text = await asyncio.wait_for(
             call_gemini(prompt_consolidated, json_mode=True, temperature=0.2, thinking_budget=4096, timeout=150.0, max_output_tokens=8192),
             timeout=165.0
