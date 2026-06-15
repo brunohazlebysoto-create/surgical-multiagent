@@ -697,7 +697,11 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
     search_term = query
     search_term_broad: Optional[str] = None
     try:
-        raw = await call_gemini(prompt_agente1, json_mode=True, temperature=0.1)
+        raw = await asyncio.wait_for(
+            call_gemini(prompt_agente1, json_mode=True, temperature=0.1,
+                        thinking_budget=0, timeout=40.0, max_output_tokens=4096),
+            timeout=50.0
+        )
         cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         data = json.loads(cleaned)
         proposal = data.get("log_content", "")

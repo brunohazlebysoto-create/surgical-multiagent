@@ -96,8 +96,10 @@ async def call_gemini(
     #     Aquí solo reintentamos 1 vez por clave y luego abandonamos.
     max_quota_attempts = num_keys * 3   # para 429s: probar todas las claves varias veces
     max_timeout_failures = num_keys     # para timeouts: probar cada clave una sola vez
+    max_json_failures = 3               # para JSON inválido: no martillear la API indefinidamente
     backoff = 3.0
     consecutive_timeout_failures = 0
+    json_parse_failures = 0
 
     async with _api_semaphore:
         for attempt in range(max_quota_attempts):
@@ -145,7 +147,19 @@ async def call_gemini(
                         _json.loads(cleaned)
                         return cleaned
                     except (_json.JSONDecodeError, ValueError):
-                        logger.warning(f"JSON inválido en intento {attempt + 1}. Reintentando...")
+                        json_parse_failures += 1
+                        logger.warning(
+                            f"JSON inválido en intento {attempt + 1} "
+                            f"(fallo de parseo {json_parse_failures}/{max_json_failures})."
+                        )
+                        # No martillear la API: si el modelo insiste en JSON malformado,
+                        # abandonar pronto para que el llamador caiga a su fallback determinista.
+                        if json_parse_failures >= max_json_failures:
+                            raise Exception(
+                                "El modelo devolvió JSON inválido repetidamente "
+                                f"({max_json_failures} veces). Abortando para usar fallback."
+                            )
+                        await asyncio.sleep(1.5)
                         continue
 
                 return text_response

@@ -80,7 +80,7 @@ async def generate_document_abstract(text: str, filename: str, pdf_base64: Optio
         """
         try:
             logger.info(f"Llamando a Gemini en modo MULTIMODAL para el PDF: {filename}")
-            summary = await call_gemini(prompt, temperature=0.15, inline_data={"mimeType": "application/pdf", "data": pdf_base64})
+            summary = await call_gemini(prompt, temperature=0.15, timeout=90.0, inline_data={"mimeType": "application/pdf", "data": pdf_base64})
             return summary
         except Exception as e:
             logger.error(f"Error generando resumen multimodal para {filename}: {e}. Intentando fallback con texto extraído.")
@@ -112,7 +112,7 @@ async def generate_document_abstract(text: str, filename: str, pdf_base64: Optio
     """
     
     try:
-        summary = await call_gemini(prompt, temperature=0.15)
+        summary = await call_gemini(prompt, temperature=0.15, timeout=60.0)
         return summary
     except Exception as e:
         logger.error(f"Error generando resumen de texto para {filename} con Gemini: {e}")
@@ -131,10 +131,13 @@ async def parse_uploaded_document(filepath: str, filename: str, run_id: Optional
     
     logger.info(f"Procesando archivo subido: {filename} ({ext})")
     
+    import asyncio as _asyncio
+
     if ext == ".pdf":
-        # Extraer texto de respaldo por si falla el modo multimodal
+        # Extraer texto de respaldo por si falla el modo multimodal.
+        # En hilo aparte: pypdf es síncrono y bloquearía el event loop (y los streams SSE).
         try:
-            text = extract_text_from_pdf(filepath)
+            text = await _asyncio.to_thread(extract_text_from_pdf, filepath)
         except Exception as err:
             logger.warning(f"No se pudo extraer texto de PDF {filename}: {err}")
             text = ""
@@ -160,9 +163,9 @@ async def parse_uploaded_document(filepath: str, filename: str, run_id: Optional
             logger.error(f"Error codificando PDF {filename} a Base64: {e}")
             
     elif ext == ".docx":
-        text = extract_text_from_docx(filepath)
+        text = await _asyncio.to_thread(extract_text_from_docx, filepath)
     elif ext == ".pptx":
-        text = extract_text_from_pptx(filepath)
+        text = await _asyncio.to_thread(extract_text_from_pptx, filepath)
     else:
         raise ValueError(f"Extensión de archivo no soportada: {ext}")
         
@@ -253,9 +256,10 @@ async def extract_and_analyze_images(pdf_path: str, run_id: str) -> list:
             """
             try:
                 vision_res = await call_gemini(
-                    prompt, 
-                    json_mode=True, 
-                    temperature=0.1, 
+                    prompt,
+                    json_mode=True,
+                    temperature=0.1,
+                    timeout=45.0,
                     inline_data={"mimeType": mime_type, "data": img_b64}
                 )
                 cleaned_res = vision_res.strip()

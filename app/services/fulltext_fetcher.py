@@ -337,8 +337,9 @@ async def fetch_free_fulltext(
     if not downloaded:
         return None, None
 
-    # Extraer texto
-    full_text = extract_text_from_pdf_path(save_path)
+    # Extraer texto en un hilo aparte: pypdf es síncrono y bloquearía el event loop
+    # (congelando el stream SSE y aparentando un cuelgue durante el enriquecimiento).
+    full_text = await asyncio.to_thread(extract_text_from_pdf_path, save_path)
     return save_path, full_text if full_text else None
 
 
