@@ -334,6 +334,20 @@ async def _gen_algorithm_chunk(
 # Writer panel (Paso 4)
 # ---------------------------------------------------------------------------
 
+async def _writer_heartbeat(queue, editor_agent):
+    """Sends periodic messages during parallel chunk generation to keep the SSE stream alive."""
+    await asyncio.sleep(60.0)
+    await queue.put(editor_agent.format_log(
+        "Redacción de secciones 1-6 en progreso (proceso intensivo, puede tardar 2-3 min)...",
+        "write"
+    ))
+    await asyncio.sleep(70.0)
+    await queue.put(editor_agent.format_log(
+        "Finalizando manuscrito clínico detallado... respuesta inminente.",
+        "write"
+    ))
+
+
 async def run_writer_panel(
     meta_analysis: Dict[str, Any],
     analyzed_papers: List[Dict[str, Any]],
@@ -431,13 +445,17 @@ async def run_writer_panel(
 
     comparison_table = _build_comparison_table(analyzed_papers)
 
-    parallel_results = await asyncio.gather(
-        generate_document_chunk(1, query, meta_analysis, papers_summary_str, detail_level=detail_level),
-        generate_document_chunk(2, query, meta_analysis, papers_summary_str, detail_level=detail_level),
-        generate_document_chunk(3, query, meta_analysis, papers_summary_str, detail_level=detail_level),
-        _gen_algorithm_chunk(query, meta_analysis, papers_summary_str, detail_level),
-        return_exceptions=True
-    )
+    hb_task = asyncio.create_task(_writer_heartbeat(event_queue, editor))
+    try:
+        parallel_results = await asyncio.gather(
+            generate_document_chunk(1, query, meta_analysis, papers_summary_str, detail_level=detail_level),
+            generate_document_chunk(2, query, meta_analysis, papers_summary_str, detail_level=detail_level),
+            generate_document_chunk(3, query, meta_analysis, papers_summary_str, detail_level=detail_level),
+            _gen_algorithm_chunk(query, meta_analysis, papers_summary_str, detail_level),
+            return_exceptions=True
+        )
+    finally:
+        hb_task.cancel()
 
     keys = ["intro_embryo", "clinical_diag", "treatment_comp", "clinical_algorithm"]
     for key, result in zip(keys, parallel_results):

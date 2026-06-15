@@ -33,6 +33,25 @@ class ScientificWriterAgent(BaseAgent):
             icon="📈"
         )
 
+async def _meta_heartbeat(queue, synth_agent, opos_agent):
+    """Sends periodic messages during the long Gemini synthesis call to keep the SSE stream alive."""
+    await asyncio.sleep(40.0)
+    await queue.put(synth_agent.format_log(
+        "Ejecutando síntesis GRADE multi-variable... (modelo en procesamiento profundo, puede tardar 1-2 min más)",
+        "meta_analyze"
+    ))
+    await asyncio.sleep(45.0)
+    await queue.put(opos_agent.format_log(
+        "Contrastando heterogeneidad entre estudios y evaluando riesgo de sesgos... en progreso",
+        "meta_analyze"
+    ))
+    await asyncio.sleep(50.0)
+    await queue.put(synth_agent.format_log(
+        "Finalizando consolidación del meta-análisis GRADE... respuesta inminente.",
+        "meta_analyze"
+    ))
+
+
 async def run_meta_analyst_panel(
     analyzed_papers: List[Dict[str, Any]], 
     query: str, 
@@ -114,10 +133,14 @@ async def run_meta_analyst_panel(
             '"evidence_range_years", "numerical_facts".\n'
         )
 
-        response_text = await asyncio.wait_for(
-            call_gemini(prompt_consolidated, json_mode=True, temperature=0.2, thinking_budget=4096, timeout=150.0, max_output_tokens=8192),
-            timeout=165.0
-        )
+        hb_task = asyncio.create_task(_meta_heartbeat(event_queue, sintetizador, opositor))
+        try:
+            response_text = await asyncio.wait_for(
+                call_gemini(prompt_consolidated, json_mode=True, temperature=0.2, thinking_budget=4096, timeout=150.0, max_output_tokens=8192),
+                timeout=165.0
+            )
+        finally:
+            hb_task.cancel()
         data = json.loads(response_text)
         
         synth_msg = data.get("synthesizer_log", "Síntesis preliminar iniciada.")

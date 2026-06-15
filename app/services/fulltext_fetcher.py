@@ -385,18 +385,24 @@ async def enrich_papers_with_fulltext(
     ))
 
     async def _enrich_one(idx: int, paper: dict) -> Tuple[int, dict]:
-        pdf_path, full_text = await fetch_free_fulltext(
-            doi=paper.get("doi", ""),
-            title=paper.get("title", ""),
-            save_dir=save_dir
-        )
-        if full_text:
-            existing_abstract = paper.get("abstract", "")
-            if len(full_text) > len(existing_abstract) + 200:
-                paper = dict(paper)
-                paper["abstract"] = full_text[:1500]
-                paper["fulltext_path"] = pdf_path
-                paper["has_fulltext"] = True
+        try:
+            pdf_path, full_text = await asyncio.wait_for(
+                fetch_free_fulltext(
+                    doi=paper.get("doi", ""),
+                    title=paper.get("title", ""),
+                    save_dir=save_dir
+                ),
+                timeout=18.0
+            )
+            if full_text:
+                existing_abstract = paper.get("abstract", "")
+                if len(full_text) > len(existing_abstract) + 200:
+                    paper = dict(paper)
+                    paper["abstract"] = full_text[:1500]
+                    paper["fulltext_path"] = pdf_path
+                    paper["has_fulltext"] = True
+        except Exception:
+            pass  # timeout or network error — use paper as-is
         return idx, paper
 
     results = await asyncio.gather(

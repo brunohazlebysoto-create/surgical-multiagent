@@ -267,6 +267,25 @@ def _build_content_slides(
     return slides
 
 
+async def _presenter_heartbeat(queue, prog_agent):
+    """Sends periodic messages during PPTX generation to keep the SSE stream alive."""
+    await asyncio.sleep(60.0)
+    await queue.put(prog_agent.format_log(
+        "Generando esquema de diapositivas (proceso intensivo, puede tardar 3-4 min)...",
+        "present"
+    ))
+    await asyncio.sleep(65.0)
+    await queue.put(prog_agent.format_log(
+        "Estructurando diapositivas clínicas con notas del ponente... en progreso",
+        "present"
+    ))
+    await asyncio.sleep(65.0)
+    await queue.put(prog_agent.format_log(
+        "Finalizando JSON de presentación... respuesta inminente.",
+        "present"
+    ))
+
+
 async def run_presenter_panel(
     meta_analysis: Dict[str, Any],
     analyzed_papers: List[Dict[str, Any]],
@@ -426,6 +445,7 @@ async def run_presenter_panel(
     }}
     """
 
+    hb_task = asyncio.create_task(_presenter_heartbeat(event_queue, programador))
     try:
         response_json_text = await asyncio.wait_for(
             call_gemini(
@@ -447,6 +467,8 @@ async def run_presenter_panel(
     except Exception as e:
         logger.error(f"Error generating or parsing PPTX JSON: {e}. Usando deck derivado del meta-análisis.")
         slides_list = _build_content_slides(query, meta_analysis, analyzed_papers)
+    finally:
+        hb_task.cancel()
 
     await event_queue.put(programador.format_log(
         f"¡Esquema de diapositivas consolidado en JSON ({len(slides_list)} diapositivas detalladas) con éxito! "

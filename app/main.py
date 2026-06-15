@@ -209,9 +209,9 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
                 "content": f"Descargando texto completo de **todos** los {n_with_doi} papers seleccionados con DOI (Unpaywall, S2OA, Europe PMC, OpenAlex, CORE)..."
             })
             try:
-                # Timeout escalado al número de papers; todos corren en paralelo así que
-                # el tiempo real es ~igual al paper más lento, no la suma
-                enrich_timeout = max(90.0, n_with_doi * 5.0)
+                # Todos los papers corren en paralelo y cada uno tiene un timeout de 18s
+                # dentro de _enrich_one, así que 60s es más que suficiente como tope global.
+                enrich_timeout = 60.0
                 selected_papers = await asyncio.wait_for(
                     enrich_papers_with_fulltext(
                         selected_papers, event_queue, run_id=run_id,
