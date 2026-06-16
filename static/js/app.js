@@ -641,6 +641,60 @@ document.addEventListener("DOMContentLoaded", () => {
                 details.appendChild(oaBadge);
             }
 
+            // "Subir PDF" button — visible for every paper that doesn't have fulltext yet
+            if (!paper.has_fulltext) {
+                const uploadPdfBtn = document.createElement("button");
+                uploadPdfBtn.className = "btn btn-outline btn-xs upload-pdf-btn";
+                uploadPdfBtn.innerHTML = `<i class="fa-solid fa-file-arrow-up"></i> Subir PDF`;
+                uploadPdfBtn.title = "Sube el PDF de este paper para que el sistema analice su contenido completo";
+
+                const pdfInput = document.createElement("input");
+                pdfInput.type = "file";
+                pdfInput.accept = ".pdf";
+                pdfInput.style.display = "none";
+
+                uploadPdfBtn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    pdfInput.click();
+                });
+
+                pdfInput.addEventListener("change", async () => {
+                    const file = pdfInput.files[0];
+                    if (!file) return;
+                    uploadPdfBtn.disabled = true;
+                    uploadPdfBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Subiendo...`;
+                    try {
+                        const fd = new FormData();
+                        fd.append("doi", paper.doi);
+                        fd.append("file", file);
+                        const resp = await fetch(`/api/upload-paper-pdf/${currentRunId}`, {
+                            method: "POST",
+                            headers: { "X-Access-Password": localStorage.getItem("access_password") || "" },
+                            body: fd
+                        });
+                        const result = await resp.json();
+                        if (result.status === "ok") {
+                            uploadPdfBtn.className = "btn btn-xs fulltext-badge";
+                            uploadPdfBtn.innerHTML = `<i class="fa-solid fa-check"></i> PDF cargado (${Math.round(result.chars / 1000)}k chars)`;
+                            uploadPdfBtn.disabled = true;
+                            paper.has_fulltext = true;
+                            if (result.preview) {
+                                abstractDiv.innerText = result.preview + "…";
+                            }
+                        } else {
+                            uploadPdfBtn.innerHTML = `<i class="fa-solid fa-xmark"></i> Error al subir`;
+                            uploadPdfBtn.disabled = false;
+                        }
+                    } catch {
+                        uploadPdfBtn.innerHTML = `<i class="fa-solid fa-xmark"></i> Error`;
+                        uploadPdfBtn.disabled = false;
+                    }
+                });
+
+                details.appendChild(pdfInput);
+                details.appendChild(uploadPdfBtn);
+            }
+
             card.appendChild(checkbox);
             card.appendChild(details);
 

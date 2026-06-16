@@ -455,6 +455,57 @@ async def upload_document(
         gemini_keys_context.reset(token)
 
 
+@app.post("/api/upload-paper-pdf/{run_id}")
+async def upload_paper_pdf(
+    run_id: str,
+    doi: str = Form(...),
+    file: UploadFile = File(...),
+    _ = Depends(verify_access)
+):
+    """
+    Accepts a user-uploaded PDF for a specific paper (identified by DOI).
+    Extracts its text and stores it as paper["fulltext"] so PICO-S and the
+    writer use the complete paper content instead of just the abstract.
+    """
+    if run_id not in global_runs:
+        raise HTTPException(status_code=404, detail="Ejecución no encontrada")
+
+    # Save the PDF to disk
+    upload_dir = f"static/uploads/{run_id}/user_pdfs"
+    os.makedirs(upload_dir, exist_ok=True)
+    import re as _re
+    safe_doi = _re.sub(r"[^\w\-]", "_", doi)[:60]
+    save_path = f"{upload_dir}/{safe_doi}.pdf"
+    content = await file.read()
+    with open(save_path, "wb") as f:
+        f.write(content)
+
+    # Extract text (synchronous pypdf — run in thread to avoid blocking SSE)
+    from app.services.fulltext_fetcher import extract_text_from_pdf_path
+    full_text = await asyncio.to_thread(extract_text_from_pdf_path, save_path, 8000)
+
+    if not full_text or len(full_text) < 100:
+        raise HTTPException(status_code=422, detail="No se pudo extraer texto del PDF. ¿Es un PDF escaneado sin OCR?")
+
+    # Link extracted text to the matching paper in this run's paper list
+    papers = global_runs[run_id]["papers_found"]
+    matched = False
+    for p in papers:
+        if p.get("doi") == doi:
+            p["fulltext"] = full_text[:5000]
+            p["fulltext_path"] = save_path
+            p["has_fulltext"] = True
+            matched = True
+            break
+
+    if not matched:
+        # DOI not found — still save for use if paper is later confirmed
+        logger.warning(f"upload-paper-pdf: DOI {doi!r} not found in papers_found for run {run_id}")
+
+    logger.info(f"PDF uploaded for DOI {doi!r}: {len(full_text)} chars extracted")
+    return {"status": "ok", "chars": len(full_text), "preview": full_text[:300]}
+
+
 class FreeSearchRequest(BaseModel):
     doi: str
     title: str = ""
