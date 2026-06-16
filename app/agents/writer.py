@@ -122,8 +122,78 @@ def _build_bibtex_refs(analyzed_papers: List[Dict[str, Any]]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Output cleaner — strips model meta-commentary from generated chunks
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+_META_PATTERNS = [
+    r'^\s*---+\s*$',                            # horizontal rules
+    r'^\s*Recuento de palabras',                # word-count self-report
+    r'^\s*Citas por secci[oó]n',                # citation summary
+    r'^\s*Secci[oó]n \d+:\s*\(',               # inline citation list "Sección 1: (Autor…)"
+    r'^\s*Ambas secciones cumplen',             # compliance statement
+    r'^\s*El contenido es',                     # self-assessment
+    r'^\s*El formato Markdown',                 # self-assessment
+    r'^\s*Manuscrito:',                         # document label
+    r'^\s*Nota: el contenido',                  # internal note
+    r'^\s*Instrucciones cumplidas',             # compliance
+    r'^\s*Este manuscrito cubre',               # summary preamble
+    r'^\s*Las instrucciones',                   # instruction ref
+    r'^\s*Se han incluido',                     # compliance
+    r'^\s*\*\*Nota\*\*:',                      # bold note
+    r'^\s*Número de palabras',                  # word count
+    r'^\s*Total de palabras',                   # word count
+]
+_META_COMPILED = [_re.compile(p, _re.IGNORECASE) for p in _META_PATTERNS]
+
+
+def _clean_chunk_output(text: str) -> str:
+    """
+    Removes model meta-commentary (word counts, compliance notes, etc.) that
+    sometimes appears in generated content, and collapses duplicate section headers.
+    """
+    lines = text.split('\n')
+    cleaned = []
+    for line in lines:
+        if any(p.match(line) for p in _META_COMPILED):
+            continue
+        cleaned.append(line)
+
+    result = '\n'.join(cleaned)
+
+    # Collapse duplicate major section headings: keep only the LAST full occurrence
+    # of each "SECCIÓN N" block (the model sometimes writes content, then re-writes it
+    # after a word-count check). Strategy: find the last occurrence of each section
+    # marker and discard everything before the previous occurrence of the same marker.
+    sec_pattern = _re.compile(
+        r'(?:^|\n)((?:#+\s*)?SECCI[OÓ]N\s+\d+[:\s])',
+        _re.IGNORECASE
+    )
+    matches = list(sec_pattern.finditer(result))
+    seen: dict = {}
+    for m in matches:
+        key = _re.sub(r'\s+', ' ', m.group(1).strip().upper().rstrip(':'))
+        if key in seen:
+            # Found a duplicate — truncate the result just before the FIRST occurrence
+            result = result[seen[key]:].lstrip('\n')
+            # Re-scan after truncation (simple one-pass: handle first duplicate found)
+            break
+        seen[key] = m.start()
+
+    return result.strip()
+
+
+# ---------------------------------------------------------------------------
 # Chunk generation
 # ---------------------------------------------------------------------------
+
+_NO_META_WARN = (
+    "        ADVERTENCIA CRÍTICA: NO incluyas recuentos de palabras, resúmenes de citas, "
+    "notas de cumplimiento, separadores '---', encabezados 'Manuscrito:', listas de citas "
+    "por sección ni ningún texto que no sea contenido clínico médico. "
+    "Escribe SOLO el texto del manuscrito."
+)
 
 _CHUNK_SECTIONS_COVERED = """IMPORTANTE — Los siguientes bloques ya fueron redactados por otros autores.
 NO los repitas ni los resumas. Empieza directamente en la Sección 7:
@@ -199,6 +269,7 @@ async def generate_document_chunk(
         - Escribe un mínimo de {wt['c1']} palabras para estas dos secciones combinadas.
         - Usa títulos en Markdown (# para secciones principales, ## para subsecciones).
         {citation_rule}
+{_NO_META_WARN}
 
         Síntesis GRADE: {meta_str}
         Lista de referencias (cita solo estas): {papers_summary}
@@ -222,8 +293,12 @@ async def generate_document_chunk(
 
         Instrucciones de formato:
         - Escribe un mínimo de {wt['c2']} palabras para estas dos secciones combinadas.
+        - OBLIGATORIO: debes escribir AMBAS secciones (3 Y 4). Limita la Sección 3 a un
+          máximo de {wt['c2'] // 2} palabras para que la Sección 4 reciba espacio equivalente.
+          Si terminas la Sección 3, CONTINÚA INMEDIATAMENTE con "# Sección 4: Diagnóstico".
         - Usa tablas Markdown estructuradas.
         {citation_rule}
+{_NO_META_WARN}
 
         Síntesis GRADE: {meta_str}
         Lista de referencias (cita solo estas): {papers_summary}
@@ -253,6 +328,7 @@ async def generate_document_chunk(
         - Dosis farmacológicas SIEMPRE en mg/kg o mcg/kg.
         - Escribe un mínimo de {wt['c3']} palabras para estas secciones.
         {citation_rule}
+{_NO_META_WARN}
 
         Síntesis GRADE: {meta_str}
         Lista de referencias (cita solo estas): {papers_summary}
@@ -280,6 +356,7 @@ async def generate_document_chunk(
         - Escribe un mínimo de {wt['c4']} palabras para las secciones 7 y 8.
         - NO incluyas una sección de Referencias — esa se genera automáticamente.
         {citation_rule}
+{_NO_META_WARN}
 
         Síntesis GRADE: {meta_str}
         Lista de referencias (cita solo estas): {papers_summary}
@@ -466,11 +543,12 @@ async def run_writer_panel(
             logger.error(f"Error generando chunk {key}: {result}")
             sections[key] = fallbacks[key]
         else:
+            cleaned = _clean_chunk_output(result)
             # Inyectar tabla comparativa al final de la sección diagnóstica
             if key == "clinical_diag":
-                sections[key] = result + comparison_table
+                sections[key] = cleaned + comparison_table
             else:
-                sections[key] = result
+                sections[key] = cleaned
 
     await event_queue.put(editor.format_log(
         "Secciones 1-6 + Algoritmo completados. Redactando Sección 7 (Síntesis GRADE), "
@@ -511,7 +589,7 @@ async def run_writer_panel(
 
     # Quitar cualquier sección de referencias que Gemini haya generado y reemplazarla
     # por la lista determinista con los 3 formatos bibliográficos.
-    cleaned_chunk4 = raw_chunk4
+    cleaned_chunk4 = _clean_chunk_output(raw_chunk4)
     for marker in ("# Sección 9", "## Sección 9", "# Referencias", "## Referencias",
                    "# REFERENCIAS", "## REFERENCIAS", "# Reference", "## Reference"):
         idx = cleaned_chunk4.find(marker)
