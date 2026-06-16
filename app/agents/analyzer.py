@@ -71,10 +71,13 @@ async def run_analyzer_panel(papers: List[Dict[str, Any]], event_queue: asyncio.
             "title": p["title"][:80],
             "authors": p["authors"][:60],
             "year": p["year"],
-            "abstract": (p.get("abstract") or "")[:600]
+            # Use full PDF text when available; fall back to abstract
+            "text": (p.get("fulltext") or p.get("abstract") or "")[:2000]
         } for idx, p in enumerate(subset)]
         prompt = (
             'Analiza ' + str(len(subset)) + ' artículos quirúrgicos pediátricos.\n'
+            'Cada entrada incluye el campo "text" con el texto real del paper (PDF completo si disponible, '
+            'o abstract estructurado). Extrae toda la información posible de ese texto.\n'
             'Lista:\n' + json.dumps(input_data, ensure_ascii=False) + '\n\n'
             'Devuelve JSON con clave "analyses": array de objetos con:\n'
             '"id", "population" (breve), "intervention" (breve), "comparison" (breve),\n'
@@ -88,7 +91,7 @@ async def run_analyzer_panel(papers: List[Dict[str, Any]], event_queue: asyncio.
         try:
             resp = await asyncio.wait_for(
                 call_gemini(prompt, json_mode=True, temperature=0.1,
-                            thinking_budget=512, timeout=70.0, max_output_tokens=6144),
+                            thinking_budget=512, timeout=70.0, max_output_tokens=8192),
                 timeout=95.0
             )
             batch_data = json.loads(resp)

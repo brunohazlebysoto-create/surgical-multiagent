@@ -480,10 +480,11 @@ async def run_writer_panel(
     ref_lines = []
     for i, p in enumerate(analyzed_papers):
         authors_raw = p.get("authors", "Autores N/A")
-        abstract_excerpt = (p.get("abstract") or "").strip()
+        # Use full PDF text when available; fall back to structured abstract
+        text_excerpt = (p.get("fulltext") or p.get("abstract") or "").strip()
         abstract_line = (
-            f"\n    Extracto: {abstract_excerpt[:120]}"
-            if abstract_excerpt else ""
+            f"\n    Texto: {text_excerpt[:600]}"
+            if text_excerpt else ""
         )
         ref_lines.append(
             f"[{i + 1}] {authors_raw}. \"{p['title']}\". "

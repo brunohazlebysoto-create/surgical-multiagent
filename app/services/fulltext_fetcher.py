@@ -435,25 +435,21 @@ async def enrich_papers_with_fulltext(
                     downloaded = await download_pdf(pdf_url, save_path)
                     if downloaded:
                         full_text = await asyncio.to_thread(extract_text_from_pdf_path, save_path)
-                        if full_text:
-                            existing = paper.get("abstract", "")
-                            if len(full_text) > len(existing) + 200:
-                                paper = dict(paper)
-                                paper["abstract"] = full_text[:1500]
-                                paper["fulltext_path"] = save_path
-                                paper["has_fulltext"] = True
+                        if full_text and len(full_text) > 500:
+                            paper = dict(paper)
+                            paper["fulltext"] = full_text[:5000]   # full content for deep analysis
+                            paper["fulltext_path"] = save_path
+                            paper["has_fulltext"] = True
             else:
                 pdf_path, full_text = await asyncio.wait_for(
                     fetch_free_fulltext(doi=doi, title=paper.get("title", ""), save_dir=save_dir),
                     timeout=18.0
                 )
-                if full_text:
-                    existing = paper.get("abstract", "")
-                    if len(full_text) > len(existing) + 200:
-                        paper = dict(paper)
-                        paper["abstract"] = full_text[:1500]
-                        paper["fulltext_path"] = pdf_path
-                        paper["has_fulltext"] = True
+                if full_text and len(full_text) > 500:
+                    paper = dict(paper)
+                    paper["fulltext"] = full_text[:5000]   # full content for deep analysis
+                    paper["fulltext_path"] = pdf_path
+                    paper["has_fulltext"] = True
         except Exception:
             pass  # timeout or network error — use paper as-is
         return idx, paper
