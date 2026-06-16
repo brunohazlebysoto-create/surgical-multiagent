@@ -149,7 +149,7 @@ async def generate_document_chunk(
     papers_summary: str,
     inject_context: str = "",
     detail_level: str = "long",
-    thinking_budget: int = 8192
+    thinking_budget: int = 0
 ) -> str:
     wt = _DETAIL_WORD_TARGETS.get(detail_level, _DETAIL_WORD_TARGETS["long"])
 
@@ -289,9 +289,9 @@ async def generate_document_chunk(
     return await asyncio.wait_for(
         call_gemini(
             prompts[chunk_id], temperature=0.25, thinking_budget=thinking_budget,
-            timeout=180.0, max_output_tokens=16384
+            timeout=110.0, max_output_tokens=16384
         ),
-        timeout=195.0
+        timeout=125.0
     )
 
 
@@ -326,8 +326,8 @@ async def _gen_algorithm_chunk(
     Lista de referencias: {papers_summary}
     """
     return await asyncio.wait_for(
-        call_gemini(p, temperature=0.25, thinking_budget=4096, timeout=120.0, max_output_tokens=8192),
-        timeout=135.0
+        call_gemini(p, temperature=0.25, thinking_budget=0, timeout=110.0, max_output_tokens=8192),
+        timeout=125.0
     )
 
 

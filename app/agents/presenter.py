@@ -450,9 +450,9 @@ async def run_presenter_panel(
         response_json_text = await asyncio.wait_for(
             call_gemini(
                 prompt_pptx_json, json_mode=True, temperature=0.3,
-                thinking_budget=4096, timeout=240.0, max_output_tokens=32768
+                thinking_budget=0, timeout=150.0, max_output_tokens=32768
             ),
-            timeout=255.0
+            timeout=165.0
         )
         data = json.loads(response_json_text)
         slides_list = data.get("slides", [])
