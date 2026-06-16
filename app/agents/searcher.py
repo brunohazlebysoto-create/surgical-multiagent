@@ -865,22 +865,4 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
         agente3_msg = f"**AGENTE 3 — REVISOR**: Se recuperaron **{len(final_papers)} artículos** para la consulta '{query}'. Pasan al análisis PICO-S en el Paso 2."
     await event_queue.put(refinador.format_log(agente3_msg, "search"))
 
-    # ── ENRIQUECIMIENTO CON TEXTO COMPLETO (fuentes OA gratuitas) ────────────
-    # Timeout duro de 40 s para que el enriquecimiento nunca bloquee el pipeline.
-    try:
-        from app.services.fulltext_fetcher import enrich_papers_with_fulltext
-        run_id_for_ft = getattr(event_queue, "_run_id", None)
-        final_papers = await asyncio.wait_for(
-            enrich_papers_with_fulltext(
-                final_papers, event_queue,
-                run_id=run_id_for_ft or "tmp",
-                max_papers=5
-            ),
-            timeout=40.0
-        )
-    except asyncio.TimeoutError:
-        logger.warning("Enriquecimiento fulltext: timeout de 40s alcanzado. Continuando sin texto completo.")
-    except Exception as e:
-        logger.error(f"Error en enriquecimiento fulltext: {e}")
-
     return final_papers

@@ -264,6 +264,35 @@ async def _check_oa_fast(doi: str) -> Optional[str]:
     return None
 
 
+async def _europepmc_by_pmid(pmid: str) -> Optional[str]:
+    """Looks up a PMID in Europe PMC and returns a PDF URL if the paper is in PMC."""
+    search_url = (
+        "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+        f"?query=EXT_ID:{pmid}%20AND%20SRC:MED&resultType=core&format=json&pageSize=1"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=_API_TIMEOUT) as client:
+            r = await client.get(search_url)
+            if r.status_code != 200:
+                return None
+            results = r.json().get("resultList", {}).get("result", [])
+            if not results:
+                return None
+            item = results[0]
+            pmcid = item.get("pmcid")
+            if pmcid:
+                return f"https://europepmc.org/backend/ptpmcrender.fcgi?accid={pmcid}&blobtype=pdf"
+            # Also check fullTextUrlList for open PDFs
+            for ft in item.get("fullTextUrlList", {}).get("fullTextUrl", []):
+                if ft.get("documentStyle") == "pdf" and ft.get("availability") in ("Open access", "Free"):
+                    url = ft.get("url")
+                    if url:
+                        return url
+    except Exception as e:
+        logger.debug(f"Europe PMC PMID lookup falló para {pmid}: {e}")
+    return None
+
+
 async def check_oa_availability_batch(papers: list) -> list:
     """
     Para cada paper con DOI real, verifica si hay versión de acceso abierto.
@@ -370,37 +399,61 @@ async def enrich_papers_with_fulltext(
     os.makedirs(save_dir, exist_ok=True)
 
     enriched = 0
-    tasks_with_index = [
+    # Separate papers by DOI type: real DOI vs pubmed_PMID vs user_upload
+    real_doi_papers = [
         (i, p) for i, p in enumerate(papers)
         if p.get("doi") and not p["doi"].startswith("pubmed_") and not p["doi"].startswith("user_upload_")
     ][:max_papers]
+    pmid_papers = [
+        (i, p) for i, p in enumerate(papers)
+        if p.get("doi") and p["doi"].startswith("pubmed_")
+    ][:max(0, max_papers - len(real_doi_papers))]
+
+    tasks_with_index = real_doi_papers + pmid_papers
 
     if not tasks_with_index:
         return papers
 
+    n_doi = len(real_doi_papers)
+    n_pmid = len(pmid_papers)
     await event_queue.put(agent.format_log(
-        f"Buscando texto completo libre en **Unpaywall**, **Semantic Scholar OA**, "
-        f"**Europe PMC** y **CORE** para los {len(tasks_with_index)} papers con DOI...",
+        f"Buscando texto completo libre en **Unpaywall**, **Europe PMC**, **Semantic Scholar OA** "
+        f"y **CORE** para {n_doi} papers con DOI real y {n_pmid} via PMID de PubMed Central...",
         "search"
     ))
 
     async def _enrich_one(idx: int, paper: dict) -> Tuple[int, dict]:
+        doi = paper.get("doi", "")
         try:
-            pdf_path, full_text = await asyncio.wait_for(
-                fetch_free_fulltext(
-                    doi=paper.get("doi", ""),
-                    title=paper.get("title", ""),
-                    save_dir=save_dir
-                ),
-                timeout=18.0
-            )
-            if full_text:
-                existing_abstract = paper.get("abstract", "")
-                if len(full_text) > len(existing_abstract) + 200:
-                    paper = dict(paper)
-                    paper["abstract"] = full_text[:1500]
-                    paper["fulltext_path"] = pdf_path
-                    paper["has_fulltext"] = True
+            if doi.startswith("pubmed_"):
+                # Try Europe PMC using the PMID — many PubMed papers are in PMC for free
+                pmid = doi.split("_", 1)[-1]
+                pdf_url = await asyncio.wait_for(_europepmc_by_pmid(pmid), timeout=10.0)
+                if pdf_url:
+                    safe_name = f"pmid_{pmid}"
+                    save_path = os.path.join(save_dir, f"{safe_name}.pdf")
+                    downloaded = await download_pdf(pdf_url, save_path)
+                    if downloaded:
+                        full_text = await asyncio.to_thread(extract_text_from_pdf_path, save_path)
+                        if full_text:
+                            existing = paper.get("abstract", "")
+                            if len(full_text) > len(existing) + 200:
+                                paper = dict(paper)
+                                paper["abstract"] = full_text[:1500]
+                                paper["fulltext_path"] = save_path
+                                paper["has_fulltext"] = True
+            else:
+                pdf_path, full_text = await asyncio.wait_for(
+                    fetch_free_fulltext(doi=doi, title=paper.get("title", ""), save_dir=save_dir),
+                    timeout=18.0
+                )
+                if full_text:
+                    existing = paper.get("abstract", "")
+                    if len(full_text) > len(existing) + 200:
+                        paper = dict(paper)
+                        paper["abstract"] = full_text[:1500]
+                        paper["fulltext_path"] = pdf_path
+                        paper["has_fulltext"] = True
         except Exception:
             pass  # timeout or network error — use paper as-is
         return idx, paper
@@ -419,9 +472,10 @@ async def enrich_papers_with_fulltext(
         if enriched_paper.get("has_fulltext"):
             enriched += 1
 
+    total_tried = len(tasks_with_index)
     await event_queue.put(agent.format_log(
-        f"Texto completo recuperado para **{enriched}/{len(tasks_with_index)}** papers. "
-        f"{'Los abstracts fueron reemplazados por el texto real del paper.' if enriched else 'Las fuentes libres no retornaron PDFs descargables para esta búsqueda (papers de pago sin versión OA).'}",
+        f"Texto completo recuperado para **{enriched}/{total_tried}** papers. "
+        f"{'Abstracts extendidos con texto real del PDF.' if enriched else 'PDFs no disponibles (papers de pago); se usarán los abstracts estructurados de PubMed para el análisis PICO-S.'}",
         "search"
     ))
 

@@ -71,7 +71,7 @@ async def run_analyzer_panel(papers: List[Dict[str, Any]], event_queue: asyncio.
             "title": p["title"][:80],
             "authors": p["authors"][:60],
             "year": p["year"],
-            "abstract": (p.get("abstract") or "")[:200]
+            "abstract": (p.get("abstract") or "")[:600]
         } for idx, p in enumerate(subset)]
         prompt = (
             'Analiza ' + str(len(subset)) + ' artículos quirúrgicos pediátricos.\n'
