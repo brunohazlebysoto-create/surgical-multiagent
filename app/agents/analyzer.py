@@ -88,8 +88,8 @@ async def run_analyzer_panel(papers: List[Dict[str, Any]], event_queue: asyncio.
         try:
             resp = await asyncio.wait_for(
                 call_gemini(prompt, json_mode=True, temperature=0.1,
-                            thinking_budget=0, timeout=55.0, max_output_tokens=6144),
-                timeout=70.0
+                            thinking_budget=512, timeout=70.0, max_output_tokens=6144),
+                timeout=95.0
             )
             batch_data = json.loads(resp)
             analyses_map = {a["id"]: a for a in batch_data.get("analyses", [])}

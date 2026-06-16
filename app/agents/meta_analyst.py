@@ -136,8 +136,8 @@ async def run_meta_analyst_panel(
         hb_task = asyncio.create_task(_meta_heartbeat(event_queue, sintetizador, opositor))
         try:
             response_text = await asyncio.wait_for(
-                call_gemini(prompt_consolidated, json_mode=True, temperature=0.2, thinking_budget=4096, timeout=150.0, max_output_tokens=8192),
-                timeout=165.0
+                call_gemini(prompt_consolidated, json_mode=True, temperature=0.2, thinking_budget=4096, timeout=120.0, max_output_tokens=8192),
+                timeout=180.0
             )
         finally:
             hb_task.cancel()

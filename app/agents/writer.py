@@ -149,7 +149,7 @@ async def generate_document_chunk(
     papers_summary: str,
     inject_context: str = "",
     detail_level: str = "long",
-    thinking_budget: int = 0
+    thinking_budget: int = 2048
 ) -> str:
     wt = _DETAIL_WORD_TARGETS.get(detail_level, _DETAIL_WORD_TARGETS["long"])
 
@@ -286,12 +286,14 @@ async def generate_document_chunk(
         """
     }
 
+    # Con streaming, timeout=hueco máx entre chunks (cubre la fase de pensamiento);
+    # el wait_for externo es el tope total de pared (la salida fluye token a token).
     return await asyncio.wait_for(
         call_gemini(
             prompts[chunk_id], temperature=0.25, thinking_budget=thinking_budget,
-            timeout=110.0, max_output_tokens=16384
+            timeout=120.0, max_output_tokens=16384
         ),
-        timeout=125.0
+        timeout=180.0
     )
 
 
@@ -326,8 +328,8 @@ async def _gen_algorithm_chunk(
     Lista de referencias: {papers_summary}
     """
     return await asyncio.wait_for(
-        call_gemini(p, temperature=0.25, thinking_budget=0, timeout=110.0, max_output_tokens=8192),
-        timeout=125.0
+        call_gemini(p, temperature=0.25, thinking_budget=2048, timeout=120.0, max_output_tokens=8192),
+        timeout=180.0
     )
 
 
@@ -476,19 +478,16 @@ async def run_writer_panel(
         "write"
     ))
 
-    # ── CHUNK 4: síntesis + perlas (secuencial) ────────────────────────────────
-    # thinking_budget=0: el prompt es estructurado y el modelo ya tiene toda la síntesis
-    # GRADE, así que no necesita cadena de pensamiento. Previene el cuelgue de 10-36 min
-    # que ocurre con thinking_budget=8192 respondiendo en chunks HTTP lentos.
-    # Doble timeout: inner wait_for(195s) dentro de generate_document_chunk +
-    # outer wait_for(120s) aquí como red de seguridad adicional.
+    # ── CHUNK 4: síntesis + perlas (secuencial, con contexto de los anteriores) ─
+    # Con streaming + pensamiento moderado (2048) se obtiene síntesis de calidad sin
+    # cuelgues. El heartbeat mantiene vivo el stream SSE durante la generación.
     async def _chunk4_heartbeat():
         await asyncio.sleep(35.0)
         await event_queue.put(editor.format_log(
             "Redactando Sección 7 (Síntesis GRADE) y Sección 8 (Perlas Clínicas)... en progreso",
             "write"
         ))
-        await asyncio.sleep(40.0)
+        await asyncio.sleep(45.0)
         await event_queue.put(editor.format_log(
             "Finalizando secciones de síntesis y perlas clínicas... respuesta inminente.",
             "write"
@@ -496,14 +495,10 @@ async def run_writer_panel(
 
     hb4_task = asyncio.create_task(_chunk4_heartbeat())
     try:
-        raw_chunk4 = await asyncio.wait_for(
-            generate_document_chunk(
-                4, query, meta_analysis, papers_summary_str,
-                inject_context=_CHUNK_SECTIONS_COVERED,
-                detail_level=detail_level,
-                thinking_budget=0
-            ),
-            timeout=120.0
+        raw_chunk4 = await generate_document_chunk(
+            4, query, meta_analysis, papers_summary_str,
+            inject_context=_CHUNK_SECTIONS_COVERED,
+            detail_level=detail_level
         )
     except Exception as e:
         logger.error(f"Error generando chunk 4: {e}")

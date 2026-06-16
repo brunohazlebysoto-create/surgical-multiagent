@@ -111,38 +111,66 @@ async def call_gemini(
                 _current_key_idx = (_current_key_idx + 1) % num_keys
                 continue
 
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
+            # streamGenerateContent + alt=sse: los tokens (pensamiento + salida) llegan de
+            # forma incremental. Esto evita el cuelgue de las llamadas no-streaming, donde el
+            # servidor procesaba TODO en silencio y el timeout no podía distinguir "pensando"
+            # de "colgado". Con streaming, el read-timeout solo vigila el HUECO entre chunks,
+            # así que podemos permitir presupuestos de pensamiento altos sin riesgo de cuelgue.
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:streamGenerateContent?alt=sse&key={api_key}"
 
             try:
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    response = await client.post(url, json=contents)
+                import json as _json
+                # read = máximo hueco permitido entre chunks (cubre la fase de pensamiento inicial).
+                # El tope total de pared lo impone el asyncio.wait_for del llamador.
+                timeout_obj = httpx.Timeout(connect=10.0, read=timeout, write=10.0, pool=10.0)
+                text_response = ""
+                async with httpx.AsyncClient(timeout=timeout_obj) as client:
+                    async with client.stream("POST", url, json=contents) as response:
+                        if response.status_code == 429:
+                            await response.aread()
+                            logger.warning(
+                                f"Límite de cuota (429) para llave {key_idx}. "
+                                f"Rotando... (Intento {attempt + 1}/{max_quota_attempts})"
+                            )
+                            consecutive_timeout_failures = 0  # 429 ≠ timeout, resetear contador
+                            _current_key_idx = (_current_key_idx + 1) % num_keys
+                            if (attempt + 1) % num_keys == 0:
+                                logger.info(f"Carrusel completo de {num_keys} llaves. Esperando {backoff}s...")
+                                await asyncio.sleep(backoff)
+                                backoff *= 1.5
+                            continue
 
-                if response.status_code == 429:
-                    logger.warning(
-                        f"Límite de cuota (429) para llave {key_idx}. "
-                        f"Rotando... (Intento {attempt + 1}/{max_quota_attempts})"
-                    )
-                    consecutive_timeout_failures = 0  # 429 ≠ timeout, resetear contador
-                    _current_key_idx = (_current_key_idx + 1) % num_keys
-                    if (attempt + 1) % num_keys == 0:
-                        logger.info(f"Carrusel completo de {num_keys} llaves. Esperando {backoff}s...")
-                        await asyncio.sleep(backoff)
-                        backoff *= 1.5
-                    continue
+                        if response.status_code != 200:
+                            await response.aread()  # leer cuerpo de error antes de raise
+                        response.raise_for_status()
 
-                response.raise_for_status()
+                        # Acumular el texto de todos los eventos SSE conforme llegan
+                        async for line in response.aiter_lines():
+                            line = line.strip()
+                            if not line.startswith("data:"):
+                                continue
+                            payload = line[5:].strip()
+                            if not payload or payload == "[DONE]":
+                                continue
+                            try:
+                                chunk = _json.loads(payload)
+                            except Exception:
+                                continue
+                            for cand in chunk.get("candidates", []):
+                                parts = (cand.get("content") or {}).get("parts", []) or []
+                                for part in parts:
+                                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                                        text_response += part["text"]
+
                 consecutive_timeout_failures = 0  # éxito: resetear
+                text_response = text_response.strip()
 
-                data = response.json()
-                try:
-                    text_response = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                except (KeyError, IndexError) as err:
-                    logger.error(f"Estructura de respuesta inesperada: {data}. Error: {err}")
+                if not text_response:
+                    logger.error("El stream de Gemini no devolvió texto.")
                     return '{"error": "Respuesta vacía o incorrecta"}' if json_mode else "Error: respuesta de API inválida."
 
                 if json_mode:
                     try:
-                        import json as _json
                         cleaned = text_response.lstrip("```json").lstrip("```").rstrip("```").strip()
                         _json.loads(cleaned)
                         return cleaned

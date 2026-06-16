@@ -585,7 +585,7 @@ async def rerank_papers(
     """
     try:
         raw = await asyncio.wait_for(
-            call_gemini(prompt, json_mode=True, temperature=0.1, thinking_budget=0),
+            call_gemini(prompt, json_mode=True, temperature=0.1, thinking_budget=1024, timeout=60.0),
             timeout=90.0
         )
         cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
@@ -699,8 +699,8 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
     try:
         raw = await asyncio.wait_for(
             call_gemini(prompt_agente1, json_mode=True, temperature=0.1,
-                        thinking_budget=0, timeout=40.0, max_output_tokens=4096),
-            timeout=50.0
+                        thinking_budget=1024, timeout=60.0, max_output_tokens=4096),
+            timeout=80.0
         )
         cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         data = json.loads(cleaned)
@@ -857,8 +857,8 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
 
     try:
         agente3_msg = await asyncio.wait_for(
-            call_gemini(prompt_agente3, temperature=0.2, thinking_budget=0, timeout=45.0),
-            timeout=50.0
+            call_gemini(prompt_agente3, temperature=0.2, thinking_budget=1024, timeout=60.0),
+            timeout=80.0
         )
     except Exception as e:
         logger.error(f"Agente 3 falló: {e}. Usando fallback.")

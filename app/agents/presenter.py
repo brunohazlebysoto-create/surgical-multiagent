@@ -447,12 +447,15 @@ async def run_presenter_panel(
 
     hb_task = asyncio.create_task(_presenter_heartbeat(event_queue, programador))
     try:
+        # Streaming: las 40-60 diapositivas (hasta 32k tokens) fluyen token a token,
+        # así que pensamiento moderado (2048) no causa cuelgue. read=120s cubre la fase
+        # de pensamiento; wait_for=240s es el tope total mientras la salida sigue llegando.
         response_json_text = await asyncio.wait_for(
             call_gemini(
                 prompt_pptx_json, json_mode=True, temperature=0.3,
-                thinking_budget=0, timeout=150.0, max_output_tokens=32768
+                thinking_budget=2048, timeout=120.0, max_output_tokens=32768
             ),
-            timeout=165.0
+            timeout=240.0
         )
         data = json.loads(response_json_text)
         slides_list = data.get("slides", [])
