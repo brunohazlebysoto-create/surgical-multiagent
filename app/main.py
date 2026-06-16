@@ -520,18 +520,22 @@ async def get_download_file(run_id: str, file_type: str):
     Endpoint para descargar los entregables generados.
     Soporta búsquedas físicas si la memoria del servidor fue limpiada por reinicio/reload.
     """
+    import re as _re
+
     filepath = None
-    
+    query = ""
+
     # 1. Intentar buscar en la memoria activa de la ejecución
     if run_id in global_runs:
         run_info = global_runs[run_id]
+        query = run_info.get("query", "")
         if file_type == "word":
             filepath = run_info.get("docx_path")
         elif file_type == "powerpoint":
             filepath = run_info.get("pptx_path")
         elif file_type == "json":
             filepath = run_info.get("json_path")
-            
+
     # 2. Si no está en memoria (ej. por recarga de Uvicorn), buscar directamente en disco
     if not filepath:
         run_dir = f"static/downloads/{run_id}"
@@ -543,23 +547,34 @@ async def get_download_file(run_id: str, file_type: str):
             temp_path = f"{run_dir}/meta_analisis.json"
         else:
             raise HTTPException(status_code=400, detail="Tipo de archivo inválido")
-            
+
         if os.path.exists(temp_path):
             filepath = temp_path
 
     if not filepath:
         raise HTTPException(
-            status_code=404, 
+            status_code=404,
             detail="Ejecución o archivos no encontrados. Si el servidor se reinició, por favor inicia un nuevo análisis."
         )
-        
+
     # Limpiar barra inicial para compatibilidad con FileResponse
     clean_path = filepath.lstrip("/")
-    
+
     if not os.path.exists(clean_path):
         raise HTTPException(status_code=404, detail="El archivo físico no fue encontrado en el disco")
-        
-    filename = os.path.basename(clean_path)
+
+    # Construir nombre de descarga con el tema de búsqueda
+    if query:
+        safe_query = _re.sub(r'[^\w\s\-áéíóúüñÁÉÍÓÚÜÑ]', '', query).strip()[:50]
+        if file_type == "word":
+            filename = f"apunte de {safe_query}.docx"
+        elif file_type == "powerpoint":
+            filename = f"presentacion de {safe_query}.pptx"
+        else:
+            filename = os.path.basename(clean_path)
+    else:
+        filename = os.path.basename(clean_path)
+
     return FileResponse(clean_path, filename=filename, media_type="application/octet-stream")
 
 # Servir Frontend
