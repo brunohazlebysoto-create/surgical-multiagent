@@ -18,6 +18,9 @@ _current_key_idx = 0
 # Variable de contexto para almacenar llaves de API Gemini específicas de la ejecución actual (seguro contra asincronía)
 gemini_keys_context = contextvars.ContextVar("gemini_keys", default=None)
 
+# Variable de contexto para el modelo Gemini seleccionado por el usuario (por ejecución)
+gemini_model_context = contextvars.ContextVar("gemini_model", default=None)
+
 async def call_gemini(
     prompt: str,
     system_instruction: Optional[str] = None,
@@ -116,7 +119,8 @@ async def call_gemini(
             # servidor procesaba TODO en silencio y el timeout no podía distinguir "pensando"
             # de "colgado". Con streaming, el read-timeout solo vigila el HUECO entre chunks,
             # así que podemos permitir presupuestos de pensamiento altos sin riesgo de cuelgue.
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:streamGenerateContent?alt=sse&key={api_key}"
+            model_to_use = gemini_model_context.get() or GEMINI_MODEL
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_to_use}:streamGenerateContent?alt=sse&key={api_key}"
 
             try:
                 import json as _json

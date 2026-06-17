@@ -245,11 +245,63 @@ document.addEventListener("DOMContentLoaded", () => {
         addApiKeyRow("");
     });
 
+    // ── Model selector ────────────────────────────────────────────────────────
+    const geminiModelInput = document.getElementById("gemini-model-input");
+    const testApiBtn = document.getElementById("test-api-btn");
+    const apiTestResult = document.getElementById("api-test-result");
+
+    function getStoredModel() {
+        return localStorage.getItem("gemini_model") || "gemini-2.5-flash";
+    }
+
+    if (geminiModelInput) {
+        geminiModelInput.value = getStoredModel();
+    }
+
+    if (testApiBtn) {
+        testApiBtn.addEventListener("click", async () => {
+            const model = (geminiModelInput?.value || "").trim() || "gemini-2.5-flash";
+            const clientKeys = getStoredGeminiKeys();
+            testApiBtn.disabled = true;
+            testApiBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Probando...';
+            apiTestResult.style.color = "var(--text-secondary)";
+            apiTestResult.innerText = "Conectando con la API…";
+            try {
+                const headers = {
+                    "X-Gemini-Model": model,
+                    "X-Access-Password": localStorage.getItem("access_password") || ""
+                };
+                if (clientKeys) headers["X-Gemini-API-Keys"] = clientKeys;
+                const resp = await fetch("/api/test-api", { method: "POST", headers });
+                const data = await resp.json();
+                if (data.status === "ok") {
+                    apiTestResult.style.color = "#10b981";
+                    apiTestResult.innerText = `✅ OK · ${model} · ${data.latency_ms} ms · respuesta: "${data.response}"`;
+                } else {
+                    apiTestResult.style.color = "#ef4444";
+                    apiTestResult.innerText = `❌ Error · ${data.error || "desconocido"} · ${data.latency_ms} ms`;
+                }
+            } catch (err) {
+                apiTestResult.style.color = "#ef4444";
+                apiTestResult.innerText = `❌ Error de red: ${err.message}`;
+            } finally {
+                testApiBtn.disabled = false;
+                testApiBtn.innerHTML = '<i class="fa-solid fa-flask-vial"></i> Probar API';
+            }
+        });
+    }
+
     saveApiKeysBtn.addEventListener("click", () => {
         const inputs = apiKeysListContainer.querySelectorAll(".api-key-input");
         const keys = Array.from(inputs).map(inp => inp.value.trim()).filter(val => val.length > 0);
         localStorage.setItem("gemini_api_keys", JSON.stringify(keys));
-        
+
+        // Save selected model
+        if (geminiModelInput) {
+            const model = geminiModelInput.value.trim();
+            if (model) localStorage.setItem("gemini_model", model);
+        }
+
         saveApiKeysBtn.innerHTML = '<i class="fa-solid fa-check"></i> ¡Guardado!';
         setTimeout(() => {
             saveApiKeysBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Guardar';
@@ -938,6 +990,10 @@ document.addEventListener("DOMContentLoaded", () => {
             const clientKeys = getStoredGeminiKeys();
             if (clientKeys) {
                 headers["X-Gemini-API-Keys"] = clientKeys;
+            }
+            const selectedModel = getStoredModel();
+            if (selectedModel && selectedModel !== "gemini-2.5-flash") {
+                headers["X-Gemini-Model"] = selectedModel;
             }
             const pipeline_config = {
                 reranking:   document.getElementById("toggle-reranking")?.checked ?? true,

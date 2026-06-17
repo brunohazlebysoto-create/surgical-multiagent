@@ -82,13 +82,14 @@ class ConfirmFormatRequest(BaseModel):
     output_format: str = "both"   # "word", "pptx", "both"
     detail_level: str = "long"    # "short", "medium", "long", "very_detailed"
 
-async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, run_id: str, client_keys: List[str] = None, pipeline_config: dict = None):
+async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, run_id: str, client_keys: List[str] = None, pipeline_config: dict = None, gemini_model: str = None):
     """
     Orquesta el flujo del multi-agente.
     Pausa el flujo al finalizar el Paso 1 (Búsqueda) y espera confirmación del usuario.
     """
-    from app.agents.base import gemini_keys_context
+    from app.agents.base import gemini_keys_context, gemini_model_context
     token = gemini_keys_context.set(client_keys)
+    model_token = gemini_model_context.set(gemini_model or None)
     cfg = pipeline_config or {}
     # Inyectar run_id en la queue para que fulltext_fetcher pueda guardar PDFs
     event_queue._run_id = run_id
@@ -308,19 +309,64 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
     except Exception as e:
         logger.exception("Error durante la ejecución del pipeline")
         await event_queue.put({
-            "agent": "Sistema", "role": "Error", 
-            "color": "#ef4444", "icon": "❌", "stage": "failed", 
+            "agent": "Sistema", "role": "Error",
+            "color": "#ef4444", "icon": "❌", "stage": "failed",
             "content": f"Ocurrió un error crítico durante el análisis: {str(e)}"
         })
     finally:
         gemini_keys_context.reset(token)
+        gemini_model_context.reset(model_token)
+
+
+@app.post("/api/test-api")
+async def test_api_keys(
+    x_gemini_api_keys: Optional[str] = Header(None),
+    x_gemini_model: Optional[str] = Header(None),
+    _ = Depends(verify_access)
+):
+    """Prueba las claves de API de Gemini y devuelve latencia y estado."""
+    import time
+    from app.agents.base import gemini_keys_context, gemini_model_context, call_gemini
+    from app.core.config import GEMINI_MODEL as _DEFAULT_MODEL
+
+    client_keys = [k.strip() for k in (x_gemini_api_keys or "").split(",") if k.strip()]
+    selected_model = (x_gemini_model or "").strip() or _DEFAULT_MODEL
+
+    key_token = gemini_keys_context.set(client_keys if client_keys else None)
+    model_token = gemini_model_context.set(selected_model)
+    start = time.time()
+    try:
+        response = await asyncio.wait_for(
+            call_gemini("Responde solo con la palabra: OK", temperature=0.0, thinking_budget=0, timeout=15.0),
+            timeout=20.0
+        )
+        elapsed_ms = round((time.time() - start) * 1000)
+        return {
+            "status": "ok",
+            "model": selected_model,
+            "response": response[:60].strip(),
+            "latency_ms": elapsed_ms,
+            "keys_count": len(client_keys) if client_keys else "servidor"
+        }
+    except Exception as e:
+        elapsed_ms = round((time.time() - start) * 1000)
+        return {
+            "status": "error",
+            "model": selected_model,
+            "error": str(e)[:200],
+            "latency_ms": elapsed_ms
+        }
+    finally:
+        gemini_keys_context.reset(key_token)
+        gemini_model_context.reset(model_token)
 
 
 @app.post("/api/start")
 async def start_pipeline(
-    request: SearchRequest, 
-    background_tasks: BackgroundTasks, 
+    request: SearchRequest,
+    background_tasks: BackgroundTasks,
     x_gemini_api_keys: Optional[str] = Header(None),
+    x_gemini_model: Optional[str] = Header(None),
     _ = Depends(verify_access)
 ):
     """
@@ -328,7 +374,7 @@ async def start_pipeline(
     """
     run_id = str(uuid.uuid4())
     event_queue = asyncio.Queue()
-    
+
     global_runs[run_id] = {
         "event_queue": event_queue,
         "docx_path": None,
@@ -344,18 +390,16 @@ async def start_pipeline(
         "output_format": "both",
         "detail_level": "long"
     }
-    
-    # Parsear claves de API enviadas por el cliente
-    client_keys = []
-    if x_gemini_api_keys:
-        client_keys = [k.strip() for k in x_gemini_api_keys.split(",") if k.strip()]
 
-    # Serializar pipeline_config como dict plano
+    client_keys = [k.strip() for k in (x_gemini_api_keys or "").split(",") if k.strip()]
+    selected_model = (x_gemini_model or "").strip() or None
     pipeline_config = request.pipeline_config.model_dump() if request.pipeline_config else {}
 
-    # Agregar la tarea en segundo plano pasándole las claves y config
-    background_tasks.add_task(execute_multiagent_pipeline, request.query, event_queue, run_id, client_keys, pipeline_config)
-    
+    background_tasks.add_task(
+        execute_multiagent_pipeline,
+        request.query, event_queue, run_id, client_keys, pipeline_config, selected_model
+    )
+
     return {"run_id": run_id}
 
 
