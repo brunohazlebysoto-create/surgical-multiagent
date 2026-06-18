@@ -86,11 +86,15 @@ async def query_openalex(search_term: str):
 async def main():
     term = "laparoscopic versus open pyloromyotomy in infants"
     print(f"Querying term: {term}")
-    pubmed = await query_pubmed(term)
+
+    pubmed_task = query_pubmed(term)
+    crossref_task = query_crossref(term)
+    openalex_task = query_openalex(term)
+
+    pubmed, crossref, openalex = await asyncio.gather(pubmed_task, crossref_task, openalex_task)
+
     print(f"PubMed titles ({len(pubmed)}): {pubmed}")
-    crossref = await query_crossref(term)
     print(f"CrossRef titles ({len(crossref)}): {crossref}")
-    openalex = await query_openalex(term)
     print(f"OpenAlex titles ({len(openalex)}): {openalex}")
 
 asyncio.run(main())
