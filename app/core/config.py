@@ -1,4 +1,18 @@
 import os
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    # Configuración de base
+    app_name: str = "Surgical Multi-Agent Pipeline"
+    debug: bool = False
+
+    # API Keys (a cargar del .env)
+    gemini_api_key: str = ""
+
+    class Config:
+        env_file = ".env"
+
+# For backwards compatibility with the rest of the application that expects these globals
 from dotenv import load_dotenv
 
 # Cargar variables de entorno desde el archivo .env
@@ -27,4 +41,3 @@ GEMINI_PAUSE_SECONDS = 4.5  # Pausa entre turnos de debate para regular la cuota
 
 # Contraseña de acceso opcional para la aplicación
 ACCESS_PASSWORD = os.getenv("ACCESS_PASSWORD", "")
-
