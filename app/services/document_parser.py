@@ -281,18 +281,15 @@ async def extract_and_analyze_images(pdf_path: str, run_id: str) -> list:
                 else:
                     os.remove(image_path)
             except Exception as e:
-                logger.error(f"Error analizando imagen {image_filename}: {e}")
-                # Mantenerla como fallback simple
-                relative_path = f"/static/downloads/{run_id}/extracted_images/{image_filename}"
-                images_metadata.append({
-                    "file_path": image_path,
-                    "url": relative_path,
-                    "title": f"Figura {image_count+1} (Extraída)",
-                    "caption": "Figura clínica extraída del documento original.",
-                    "page": page_num + 1
-                })
-                image_count += 1
-                
+                # Si el análisis Vision falla (timeout, JSON inválido), DESCARTAR la imagen
+                # en vez de conservarla. Conservar imágenes sin validar inyectaba logos,
+                # banners y decoraciones en el documento clínico — peor que omitir una figura.
+                logger.error(f"Error analizando imagen {image_filename}: {e}. Descartada por precaución.")
+                try:
+                    os.remove(image_path)
+                except OSError:
+                    pass
+
     return images_metadata
 
 async def download_pmc_figures(doi: str, run_id: str) -> list:

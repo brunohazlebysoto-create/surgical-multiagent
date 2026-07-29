@@ -325,7 +325,7 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
                 "color": "#a855f7", "icon": "⚙️", "stage": "render",
                 "content": "Renderizando presentación de PowerPoint (.pptx) detallada..."
             })
-            build_pptx(slides, pptx_filepath, run_id=run_id, meta_analysis=meta_analysis)
+            build_pptx(slides, pptx_filepath, run_id=run_id, meta_analysis=meta_analysis, analyzed_papers=analyzed_papers)
             global_runs[run_id]["pptx_path"] = f"/static/downloads/{run_id}/presentacion_profesional.pptx"
         
         # Guardar JSON de Meta-análisis

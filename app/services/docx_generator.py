@@ -245,22 +245,25 @@ def add_prisma_table(doc, query, prisma_data=None):
     p.paragraph_format.keep_with_next = True
     
     headers = ["Fase PRISMA", "Detalle del Proceso de Selección", "Nº Artículos"]
-    
-    p_data = prisma_data or {
-        "identified": 85,
-        "screened": 48,
-        "excluded": 33,
-        "included": 15
-    }
-    
+
+    # Acceso seguro con .get() (evita KeyError si el caller pasa un dict parcial).
+    p_data = prisma_data or {}
+    identified = int(p_data.get("identified", 0) or 0)
+    screened = int(p_data.get("screened", 0) or 0)
+    excluded = int(p_data.get("excluded", 0) or 0)
+    included = int(p_data.get("included", 0) or 0)
+    # Elegibilidad = artículos que llegaron a evaluación de texto completo = incluidos + excluidos.
+    # (Antes esta fila reusaba erróneamente 'screened', mostrando el mismo número que Cribado.)
+    eligibility = included + excluded
+
     rows = [
-        ["Identificación", "Registros identificados en PubMed, CrossRef, OpenAlex y Semantic Scholar", str(p_data["identified"])],
-        ["Cribado (Screening)", "Registros cribados después de eliminar duplicados automáticos", str(p_data["screened"])],
-        ["Elegibilidad", "Artículos de texto completo evaluados para elegibilidad (Exclusión de estudios no pediátricos o ciencia básica)", str(p_data["screened"])],
-        ["Excluidos", "Artículos excluidos por no cumplir criterios clínicos pediátricos", str(p_data["excluded"])],
-        ["Inclusión", "Estudios finales seleccionados para la síntesis de evidencia y meta-análisis", str(p_data["included"])]
+        ["Identificación", "Registros identificados en PubMed, CrossRef, OpenAlex, Semantic Scholar y Europe PMC", str(identified)],
+        ["Cribado (Screening)", "Registros cribados después de eliminar duplicados automáticos", str(screened)],
+        ["Elegibilidad", "Artículos evaluados para elegibilidad (texto completo / abstract estructurado)", str(eligibility)],
+        ["Excluidos", "Artículos excluidos por no cumplir criterios clínicos pediátricos", str(excluded)],
+        ["Inclusión", "Estudios finales seleccionados para la síntesis de evidencia y meta-análisis", str(included)]
     ]
-    
+
     add_styled_table(doc, headers, rows)
 
 def add_grade_table(doc, meta_analysis: dict = None):

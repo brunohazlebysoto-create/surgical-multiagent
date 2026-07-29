@@ -59,48 +59,31 @@ def add_slide_references(slide, text: str):
     p.alignment = PP_ALIGN.LEFT
 
 def generate_forest_plot(run_id: str, forest_plot_data: list = None) -> str:
-    """Genera un gráfico Forest Plot y lo guarda en el directorio de la ejecución."""
+    """
+    Genera un Forest Plot SOLO a partir de datos reales (odds ratios + IC provenientes
+    del corpus analizado). Si no se dispone de datos reales suficientes, devuelve "" en
+    lugar de fabricar cifras — una herramienta médica NUNCA debe inventar estadísticas.
+    """
+    # Requerir datos reales: sin ≥2 estudios con OR real, no se dibuja nada.
+    if not forest_plot_data or len(forest_plot_data) < 2:
+        logger.info("Forest plot omitido: no hay odds ratios reales en el corpus (no se fabrican datos).")
+        return ""
+
     try:
         run_dir = f"static/downloads/{run_id}" if run_id else "static/downloads/temp"
         os.makedirs(run_dir, exist_ok=True)
-        img_path = os.path.join(run_dir, "forest_plot_synthetic.png")
+        img_path = os.path.join(run_dir, "forest_plot.png")
 
-        using_real_data = False
-        # Datos de metanálisis
-        labels = [
-            "Oomen et al. (2021)",
-            "Gauderer et al. (2019)",
-            "Rothenberg et al. (2020)",
-            "Holcomb et al. (2022)",
-            "Consenso Global (Resumen)"
-        ]
-        odds_ratios = [0.85, 0.72, 1.12, 0.65, 0.78]
-        ci_lower = [0.60, 0.51, 0.88, 0.44, 0.68]
-        ci_upper = [1.20, 1.02, 1.43, 0.95, 0.90]
-        is_summary_flags = [False, False, False, False, True]
-
-        if forest_plot_data and len(forest_plot_data) >= 2:
-            try:
-                labels = [item["label"] for item in forest_plot_data]
-                odds_ratios = [float(item.get("or", 1.0)) for item in forest_plot_data]
-                ci_lower = [float(item.get("ci_lower", or_val - 0.3)) for or_val, item in zip(odds_ratios, forest_plot_data)]
-                ci_upper = [float(item.get("ci_upper", or_val + 0.3)) for or_val, item in zip(odds_ratios, forest_plot_data)]
-                is_summary_flags = [bool(item.get("is_summary", False)) for item in forest_plot_data]
-                using_real_data = True
-            except Exception as parse_err:
-                logger.warning(f"Error parsing forest_plot_data, falling back to synthetic data: {parse_err}")
-                labels = [
-                    "Oomen et al. (2021)",
-                    "Gauderer et al. (2019)",
-                    "Rothenberg et al. (2020)",
-                    "Holcomb et al. (2022)",
-                    "Consenso Global (Resumen)"
-                ]
-                odds_ratios = [0.85, 0.72, 1.12, 0.65, 0.78]
-                ci_lower = [0.60, 0.51, 0.88, 0.44, 0.68]
-                ci_upper = [1.20, 1.02, 1.43, 0.95, 0.90]
-                is_summary_flags = [False, False, False, False, True]
-                using_real_data = False
+        using_real_data = True
+        try:
+            labels = [item["label"] for item in forest_plot_data]
+            odds_ratios = [float(item.get("or", 1.0)) for item in forest_plot_data]
+            ci_lower = [float(item.get("ci_lower", or_val - 0.3)) for or_val, item in zip(odds_ratios, forest_plot_data)]
+            ci_upper = [float(item.get("ci_upper", or_val + 0.3)) for or_val, item in zip(odds_ratios, forest_plot_data)]
+            is_summary_flags = [bool(item.get("is_summary", False)) for item in forest_plot_data]
+        except Exception as parse_err:
+            logger.warning(f"forest_plot_data mal formado, se omite el gráfico: {parse_err}")
+            return ""
 
         fig, ax = plt.subplots(figsize=(6, 4.2), dpi=300)
 
@@ -146,12 +129,116 @@ def generate_forest_plot(run_id: str, forest_plot_data: list = None) -> str:
         logger.error(f"Error generando Forest Plot: {e}")
         return ""
 
-def build_pptx(slides_list: list, filepath: str, run_id: str = None, meta_analysis: dict = None):
+
+def generate_complication_chart(run_id: str, analyzed_papers: list = None) -> str:
+    """
+    Gráfico de barras HONESTO con las tasas de complicaciones REALES por estudio,
+    extraídas de numeric_data.complication_rate_pct del corpus. Solo usa datos reales;
+    si ningún estudio reporta tasa de complicaciones, devuelve "" (no fabrica nada).
+    Reemplaza el antiguo forest plot sintético como visualización por defecto.
+    """
+    if not analyzed_papers:
+        return ""
+
+    entries = []
+    for p in analyzed_papers:
+        nd = p.get("numeric_data") or {}
+        rate = nd.get("complication_rate_pct")
+        if rate is None:
+            continue
+        try:
+            rate = float(rate)
+        except (TypeError, ValueError):
+            continue
+        authors_raw = str(p.get("authors", "N/A"))
+        first = authors_raw.split(",")[0].strip()
+        year = p.get("year", "")
+        label = f"{first} et al. ({year})" if "," in authors_raw else f"{first} ({year})"
+        entries.append((label[:32], rate))
+
+    # Necesitamos al menos 2 estudios con datos reales para que el gráfico sea informativo
+    if len(entries) < 2:
+        logger.info("Gráfico de complicaciones omitido: <2 estudios con tasa real reportada.")
+        return ""
+
+    entries.sort(key=lambda e: e[1], reverse=True)
+    entries = entries[:8]  # máximo 8 barras legibles
+    labels = [e[0] for e in entries]
+    rates = [e[1] for e in entries]
+
+    try:
+        run_dir = f"static/downloads/{run_id}" if run_id else "static/downloads/temp"
+        os.makedirs(run_dir, exist_ok=True)
+        img_path = os.path.join(run_dir, "complication_chart.png")
+
+        fig, ax = plt.subplots(figsize=(6, 4.2), dpi=300)
+        fig.patch.set_facecolor('#131A26')
+        ax.set_facecolor('#131A26')
+
+        y_pos = range(len(labels))
+        ax.barh(list(y_pos), rates, color='#00D2C4', edgecolor='#0b1019', height=0.6)
+        ax.set_yticks(list(y_pos))
+        ax.set_yticklabels(labels, color='#FFFFFF', fontsize=9, fontweight='bold')
+        ax.invert_yaxis()  # el de mayor tasa arriba
+        ax.set_xlabel("Tasa de complicaciones reportada (%)", color='#FFFFFF', fontsize=10)
+        ax.set_title("Tasas de Complicaciones por Estudio (datos reales del corpus)",
+                     color='#00D2C4', fontsize=11, fontweight='bold')
+
+        # Etiquetas de valor al final de cada barra
+        for i, v in enumerate(rates):
+            ax.text(v + max(rates) * 0.01, i, f"{v:g}%", color='#FFFFFF',
+                    fontsize=8, va='center')
+
+        ax.tick_params(colors='#FFFFFF', which='both', labelsize=9)
+        ax.spines['bottom'].set_color('#FFFFFF')
+        ax.spines['left'].set_color('#FFFFFF')
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+        plt.tight_layout()
+        plt.savefig(img_path, facecolor=fig.get_facecolor(), edgecolor='none', bbox_inches='tight')
+        plt.close()
+        return img_path
+    except Exception as e:
+        logger.error(f"Error generando gráfico de complicaciones: {e}")
+        return ""
+
+def _add_picture_keep_ratio(slide, img_path, left, top, max_w, max_h):
+    """
+    Inserta una imagen preservando su relación de aspecto dentro de un cuadro
+    max_w × max_h (in Inches), centrada. Evita la distorsión de figuras clínicas
+    que causaba fijar width y height simultáneamente.
+    """
+    try:
+        from PIL import Image as _PILImage
+        with _PILImage.open(img_path) as im:
+            iw, ih = im.size
+        if iw <= 0 or ih <= 0:
+            raise ValueError("dimensiones inválidas")
+        box_ratio = max_w / max_h
+        img_ratio = iw / ih
+        if img_ratio > box_ratio:
+            w = max_w
+            h = max_w / img_ratio
+        else:
+            h = max_h
+            w = max_h * img_ratio
+        off_l = left + (max_w - w) / 2
+        off_t = top + (max_h - h) / 2
+        return slide.shapes.add_picture(img_path, Inches(off_l), Inches(off_t),
+                                        width=Inches(w), height=Inches(h))
+    except Exception:
+        # Fallback: ancho fijo, altura automática (python-pptx preserva ratio con solo width)
+        return slide.shapes.add_picture(img_path, Inches(left), Inches(top), width=Inches(max_w))
+
+
+def build_pptx(slides_list: list, filepath: str, run_id: str = None, meta_analysis: dict = None, analyzed_papers: list = None):
     """
     Toma la lista de diccionarios de diapositivas y genera una presentación PPTX
     16:9 premium y libre de errores de maquetación, con notas del orador.
     """
     _forest_data = (meta_analysis or {}).get("forest_plot_data") or []
+    _analyzed = analyzed_papers or []
 
     prs = Presentation()
     prs.slide_width = Inches(13.333)
@@ -376,13 +463,15 @@ def build_pptx(slides_list: list, filepath: str, run_id: str = None, meta_analys
                         img_url = files[0]
                         
             if not img_url:
-                img_url = f"static/downloads/{run_id}/forest_plot_synthetic.png"
-                if not os.path.exists(img_url):
+                # Preferir un gráfico REAL de complicaciones; si no hay datos, un forest plot
+                # solo si hay ORs reales. Nunca fabricar.
+                img_url = generate_complication_chart(run_id, _analyzed)
+                if not img_url:
                     img_url = generate_forest_plot(run_id, forest_plot_data=_forest_data)
-                    
+
             if img_url and os.path.exists(img_url):
                 try:
-                    slide.shapes.add_picture(img_url, Inches(1.0), Inches(1.8), width=Inches(5.5), height=Inches(4.2))
+                    _add_picture_keep_ratio(slide, img_url, 1.0, 1.8, 5.5, 4.2)
                 except Exception as e:
                     logger.error(f"Error insertando imagen en slide: {e}")
                     
@@ -405,11 +494,14 @@ def build_pptx(slides_list: list, filepath: str, run_id: str = None, meta_analys
             add_slide_title(slide, title)
             
             bullets = s.get("bullets", [])
+            # Forest plot real si hay ORs; si no, gráfico real de complicaciones; si no, nada.
             img_path = generate_forest_plot(run_id, forest_plot_data=_forest_data)
-            
+            if not img_path:
+                img_path = generate_complication_chart(run_id, _analyzed)
+
             if img_path and os.path.exists(img_path):
                 try:
-                    slide.shapes.add_picture(img_path, Inches(1.0), Inches(1.8), width=Inches(5.5), height=Inches(4.2))
+                    _add_picture_keep_ratio(slide, img_path, 1.0, 1.8, 5.5, 4.2)
                 except Exception as e:
                     logger.error(f"Error insertando Forest Plot: {e}")
                     
