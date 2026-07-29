@@ -1,7 +1,10 @@
 import asyncio
+import hashlib
 import logging
+import time
 import httpx
 import contextvars
+from collections import OrderedDict
 from typing import Dict, Any, Optional
 from app.core.config import GEMINI_API_KEYS, GEMINI_MODEL, GEMINI_PAUSE_SECONDS
 
@@ -11,6 +14,39 @@ logging.basicConfig(level=logging.INFO)
 
 # Semáforo global para controlar la concurrencia a nivel de aplicación (evita saturar el free tier)
 _api_semaphore = asyncio.Semaphore(3)
+
+# ── Cache de respuestas Gemini (ahorro de cuota) ───────────────────────────
+# Solo se cachean llamadas DETERMINISTAS (temperature <= 0.1): extracción PICO-S,
+# reranking y terminología. NO se cachea contenido creativo (redacción, presentación)
+# para preservar variación y frescura. Cache LRU en memoria con TTL de 1 hora.
+_gemini_cache: "OrderedDict[str, tuple]" = OrderedDict()
+_CACHE_MAX_ENTRIES = 256
+_CACHE_TTL_SECONDS = 60 * 60
+_CACHE_TEMPERATURE_MAX = 0.1  # umbral: solo cachear respuestas casi-deterministas
+
+
+def _cache_key(model: str, prompt: str, temperature: float, json_mode: bool, thinking_budget: int) -> str:
+    raw = f"{model}|{temperature}|{json_mode}|{thinking_budget}|{prompt}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _cache_get(key: str) -> Optional[str]:
+    entry = _gemini_cache.get(key)
+    if entry is None:
+        return None
+    ts, value = entry
+    if time.time() - ts > _CACHE_TTL_SECONDS:
+        _gemini_cache.pop(key, None)
+        return None
+    _gemini_cache.move_to_end(key)  # LRU: marcar como recién usado
+    return value
+
+
+def _cache_put(key: str, value: str) -> None:
+    _gemini_cache[key] = (time.time(), value)
+    _gemini_cache.move_to_end(key)
+    while len(_gemini_cache) > _CACHE_MAX_ENTRIES:
+        _gemini_cache.popitem(last=False)  # descartar el más antiguo
 
 # Índice global para rotar las API Keys entre las llamadas concurrentes
 _current_key_idx = 0
@@ -87,6 +123,17 @@ async def call_gemini(
 
     if json_mode:
         contents["generationConfig"]["responseMimeType"] = "application/json"
+
+    # ── Cache lookup (solo llamadas deterministas, sin imágenes) ────────────
+    resolved_model = gemini_model_context.get() or GEMINI_MODEL
+    cache_enabled = (temperature <= _CACHE_TEMPERATURE_MAX) and (inline_data is None)
+    cache_key = None
+    if cache_enabled:
+        cache_key = _cache_key(resolved_model, prompt, temperature, json_mode, thinking_budget)
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            logger.info("Cache HIT de Gemini (respuesta determinista reutilizada, cuota ahorrada).")
+            return cached
 
     # Pacing de UI y Rate Limit: Pausa estratégica para regular la tasa antes de la llamada
     await asyncio.sleep(GEMINI_PAUSE_SECONDS)
@@ -184,6 +231,8 @@ async def call_gemini(
                     try:
                         cleaned = text_response.lstrip("```json").lstrip("```").rstrip("```").strip()
                         _json.loads(cleaned)
+                        if cache_enabled and cache_key:
+                            _cache_put(cache_key, cleaned)
                         return cleaned
                     except (_json.JSONDecodeError, ValueError):
                         json_parse_failures += 1
@@ -201,6 +250,8 @@ async def call_gemini(
                         await asyncio.sleep(1.5)
                         continue
 
+                if cache_enabled and cache_key:
+                    _cache_put(cache_key, text_response)
                 return text_response
 
             except httpx.HTTPStatusError as e:

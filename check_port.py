@@ -24,4 +24,7 @@ def get_process_on_port(port):
         print(f"Error checking port: {e}")
     return None
 
-get_process_on_port(8000)
+if __name__ == "__main__":
+    # Utilidad de diagnóstico solo para Windows. Guardada bajo __main__ para que
+    # nunca se ejecute como efecto secundario de un import.
+    get_process_on_port(8000)

@@ -88,8 +88,13 @@ async def generate_document_abstract(text: str, filename: str, pdf_base64: Optio
     if not text:
         return "El archivo no contiene texto legible."
         
-    # Limitar texto de entrada si es absurdamente largo por seguridad de tokens (ej: 30k caracteres)
-    input_text = text[:30000]
+    # Limitar texto de entrada por seguridad de tokens. Gemini 2.5 admite contextos amplios,
+    # así que subimos el tope a 60k chars (antes 30k) para no perder métodos/resultados de
+    # papers largos. Se registra cuando se descarta contenido significativo.
+    _MAX_INPUT_CHARS = 60000
+    if len(text) > _MAX_INPUT_CHARS:
+        logger.info(f"Documento '{filename}' truncado de {len(text)} a {_MAX_INPUT_CHARS} chars para análisis.")
+    input_text = text[:_MAX_INPUT_CHARS]
     
     prompt = f"""
     Eres un transcriptor y redactor médico especializado en cirugía infantil y medicina basada en evidencia.
