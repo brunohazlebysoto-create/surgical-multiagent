@@ -945,12 +945,88 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // --- Iniciar Proceso (Llamada al Backend) ---
+    // ── Historial de búsquedas (localStorage) ──────────────────────────────
+    function getSearchHistory() {
+        try {
+            return JSON.parse(localStorage.getItem("search_history") || "[]");
+        } catch { return []; }
+    }
+    function saveSearchHistory(query) {
+        let hist = getSearchHistory().filter(q => q.toLowerCase() !== query.toLowerCase());
+        hist.unshift(query);
+        hist = hist.slice(0, 8);  // máximo 8 recientes
+        localStorage.setItem("search_history", JSON.stringify(hist));
+        renderSearchHistory();
+    }
+    function renderSearchHistory() {
+        const row = document.getElementById("search-history-row");
+        const chips = document.getElementById("search-history-chips");
+        if (!row || !chips) return;
+        const hist = getSearchHistory();
+        if (!hist.length) { row.style.display = "none"; return; }
+        row.style.display = "flex";
+        chips.innerHTML = "";
+        hist.forEach(q => {
+            const chip = document.createElement("button");
+            chip.type = "button";
+            chip.className = "history-chip";
+            chip.textContent = q.length > 40 ? q.slice(0, 40) + "…" : q;
+            chip.title = q;
+            chip.style.cssText = "background:rgba(56,189,248,0.1); border:1px solid rgba(56,189,248,0.25); color:#38bdf8; border-radius:14px; padding:4px 12px; font-size:12px; cursor:pointer;";
+            chip.addEventListener("click", () => { queryInput.value = q; queryInput.focus(); });
+            chips.appendChild(chip);
+        });
+    }
+    const clearHistBtn = document.getElementById("clear-history-btn");
+    if (clearHistBtn) {
+        clearHistBtn.addEventListener("click", () => {
+            localStorage.removeItem("search_history");
+            renderSearchHistory();
+        });
+    }
+    renderSearchHistory();
+
+    // ── Barra de progreso global (%) ligada a los pasos del pipeline ────────
+    const _STAGE_PROGRESS = {
+        search: { pct: 15, label: "Paso 1/5 · Búsqueda de evidencia" },
+        selection_required: { pct: 20, label: "Esperando tu selección de papers" },
+        output_format_required: { pct: 25, label: "Esperando configuración de salida" },
+        analyze: { pct: 40, label: "Paso 2/5 · Análisis PICO-S" },
+        meta_analyze: { pct: 60, label: "Paso 3/5 · Meta-análisis GRADE" },
+        write: { pct: 78, label: "Paso 4/5 · Redacción médica" },
+        present: { pct: 90, label: "Paso 5/5 · Presentación" },
+        render: { pct: 96, label: "Compilando archivos" },
+        completed: { pct: 100, label: "¡Completado!" },
+        failed: { pct: 100, label: "Proceso detenido" },
+    };
+    function showGlobalProgress() {
+        const w = document.getElementById("global-progress-wrap");
+        if (w) w.style.display = "block";
+    }
+    function hideGlobalProgress() {
+        const w = document.getElementById("global-progress-wrap");
+        if (w) w.style.display = "none";
+    }
+    function updateGlobalProgress(stage) {
+        const info = _STAGE_PROGRESS[stage];
+        if (!info) return;
+        const fill = document.getElementById("global-progress-fill");
+        const pct = document.getElementById("global-progress-pct");
+        const label = document.getElementById("global-progress-label");
+        if (fill) fill.style.width = info.pct + "%";
+        if (pct) pct.textContent = info.pct + "%";
+        if (label) label.textContent = info.label;
+    }
+
     startBtn.addEventListener("click", async () => {
         const query = queryInput.value.trim();
         if (!query) {
             alert("Por favor ingresa un tema de investigación quirúrgica.");
             return;
         }
+        saveSearchHistory(query);
+        showGlobalProgress();
+        updateGlobalProgress("search");
 
         // 1. Limpieza de UI
         clearConsole();
@@ -1050,6 +1126,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
                 // Actualizar badge de sub-agente en tiempo real
                 if (data.agent) markSubAgent(data.agent, false);
+
+                // Actualizar barra de progreso global (%) para cualquier stage conocido
+                if (data.stage) updateGlobalProgress(data.stage);
 
                 // Actualizar pipeline de nodos
                 if (data.stage && !["completed", "failed", "selection_required", "output_format_required"].includes(data.stage)) {
