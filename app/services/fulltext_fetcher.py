@@ -441,15 +441,35 @@ async def enrich_papers_with_fulltext(
                             paper["fulltext_path"] = save_path
                             paper["has_fulltext"] = True
             else:
-                pdf_path, full_text = await asyncio.wait_for(
-                    fetch_free_fulltext(doi=doi, title=paper.get("title", ""), save_dir=save_dir),
-                    timeout=18.0
-                )
-                if full_text and len(full_text) > 500:
-                    paper = dict(paper)
-                    paper["fulltext"] = full_text[:5000]   # full content for deep analysis
-                    paper["fulltext_path"] = pdf_path
-                    paper["has_fulltext"] = True
+                # OPTIMIZACIÓN: si el pre-chequeo de OA ya encontró una URL de PDF para
+                # este paper, descargarla directamente en vez de re-consultar las 4 APIs
+                # (Unpaywall/S2/EuropePMC/OpenAlex) por segunda vez. Ahorra ~4 llamadas/paper.
+                oa_url = paper.get("oa_url")
+                full_text = None
+                if oa_url and isinstance(oa_url, str) and oa_url.startswith("http"):
+                    safe_doi = re.sub(r"[^\w-]", "_", doi or "")[:60]
+                    save_path = os.path.join(save_dir, f"{safe_doi}_oa.pdf")
+                    try:
+                        if await asyncio.wait_for(download_pdf(oa_url, save_path), timeout=15.0):
+                            full_text = await asyncio.to_thread(extract_text_from_pdf_path, save_path)
+                            if full_text and len(full_text) > 500:
+                                paper = dict(paper)
+                                paper["fulltext"] = full_text[:5000]
+                                paper["fulltext_path"] = save_path
+                                paper["has_fulltext"] = True
+                    except Exception:
+                        full_text = None
+                # Fallback: si no había oa_url reutilizable o falló, buscar en todas las fuentes
+                if not paper.get("has_fulltext"):
+                    pdf_path, full_text = await asyncio.wait_for(
+                        fetch_free_fulltext(doi=doi, title=paper.get("title", ""), save_dir=save_dir),
+                        timeout=18.0
+                    )
+                    if full_text and len(full_text) > 500:
+                        paper = dict(paper)
+                        paper["fulltext"] = full_text[:5000]   # full content for deep analysis
+                        paper["fulltext_path"] = pdf_path
+                        paper["has_fulltext"] = True
         except Exception:
             pass  # timeout or network error — use paper as-is
         return idx, paper
