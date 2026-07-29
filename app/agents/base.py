@@ -25,8 +25,12 @@ _CACHE_TTL_SECONDS = 60 * 60
 _CACHE_TEMPERATURE_MAX = 0.1  # umbral: solo cachear respuestas casi-deterministas
 
 
-def _cache_key(model: str, prompt: str, temperature: float, json_mode: bool, thinking_budget: int) -> str:
-    raw = f"{model}|{temperature}|{json_mode}|{thinking_budget}|{prompt}"
+def _cache_key(model: str, prompt: str, temperature: float, json_mode: bool,
+               thinking_budget: int, system_instruction: Optional[str] = None,
+               max_output_tokens: Optional[int] = None) -> str:
+    # Incluye system_instruction y max_output_tokens para que dos llamadas que solo
+    # difieren en esos parámetros no colisionen y devuelvan una respuesta equivocada.
+    raw = f"{model}|{temperature}|{json_mode}|{thinking_budget}|{max_output_tokens}|{system_instruction or ''}|{prompt}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -129,7 +133,8 @@ async def call_gemini(
     cache_enabled = (temperature <= _CACHE_TEMPERATURE_MAX) and (inline_data is None)
     cache_key = None
     if cache_enabled:
-        cache_key = _cache_key(resolved_model, prompt, temperature, json_mode, thinking_budget)
+        cache_key = _cache_key(resolved_model, prompt, temperature, json_mode, thinking_budget,
+                               system_instruction, max_output_tokens)
         cached = _cache_get(cache_key)
         if cached is not None:
             logger.info("Cache HIT de Gemini (respuesta determinista reutilizada, cuota ahorrada).")
