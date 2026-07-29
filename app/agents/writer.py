@@ -244,6 +244,19 @@ def _validate_citations(text: str, analyzed_papers: List[Dict[str, Any]]) -> Dic
 
 
 # ---------------------------------------------------------------------------
+# Language instruction (mejora #13 — salida ES/EN)
+# ---------------------------------------------------------------------------
+
+def _lang_instruction(language: str) -> str:
+    """Instrucción de idioma inyectada en los prompts de redacción."""
+    if (language or "es").lower().startswith("en"):
+        return ("\n        LANGUAGE: Write the ENTIRE manuscript in professional medical English. "
+                "All section headings, body text, tables and clinical pearls must be in English. "
+                "Keep author citations and DOIs as-is.\n")
+    return ("\n        IDIOMA: Redacta TODO el manuscrito en español médico profesional.\n")
+
+
+# ---------------------------------------------------------------------------
 # Chunk generation
 # ---------------------------------------------------------------------------
 
@@ -278,9 +291,11 @@ async def generate_document_chunk(
     papers_summary: str,
     inject_context: str = "",
     detail_level: str = "long",
-    thinking_budget: int = 2048
+    thinking_budget: int = 2048,
+    language: str = "es"
 ) -> str:
     wt = _DETAIL_WORD_TARGETS.get(detail_level, _DETAIL_WORD_TARGETS["long"])
+    lang_note = _lang_instruction(language)
 
     evidence_range = meta_analysis.get("evidence_range_years") or {}
     ev_min = evidence_range.get("min", "")
@@ -424,9 +439,10 @@ async def generate_document_chunk(
 
     # Con streaming, timeout=hueco máx entre chunks (cubre la fase de pensamiento);
     # el wait_for externo es el tope total de pared (la salida fluye token a token).
+    final_prompt = prompts[chunk_id] + lang_note
     return await asyncio.wait_for(
         call_gemini(
-            prompts[chunk_id], temperature=0.25, thinking_budget=thinking_budget,
+            final_prompt, temperature=0.25, thinking_budget=thinking_budget,
             timeout=120.0, max_output_tokens=16384
         ),
         timeout=180.0
@@ -437,7 +453,8 @@ async def _gen_algorithm_chunk(
     query: str,
     meta_analysis: Dict[str, Any],
     papers_summary: str,
-    detail_level: str
+    detail_level: str,
+    language: str = "es"
 ) -> str:
     wt = _DETAIL_WORD_TARGETS.get(detail_level, _DETAIL_WORD_TARGETS["long"])
     import json as _jj
@@ -463,6 +480,7 @@ async def _gen_algorithm_chunk(
     Síntesis GRADE: {meta_str}
     Lista de referencias: {papers_summary}
     """
+    p += _lang_instruction(language)
     return await asyncio.wait_for(
         call_gemini(p, temperature=0.25, thinking_budget=2048, timeout=120.0, max_output_tokens=8192),
         timeout=180.0
@@ -492,7 +510,8 @@ async def run_writer_panel(
     analyzed_papers: List[Dict[str, Any]],
     query: str,
     event_queue: asyncio.Queue,
-    detail_level: str = "long"
+    detail_level: str = "long",
+    language: str = "es"
 ) -> Dict[str, str]:
     """
     Ejecuta el Panel de Redacción (Paso 4).
@@ -588,10 +607,10 @@ async def run_writer_panel(
     hb_task = asyncio.create_task(_writer_heartbeat(event_queue, editor))
     try:
         parallel_results = await asyncio.gather(
-            generate_document_chunk(1, query, meta_analysis, papers_summary_str, detail_level=detail_level),
-            generate_document_chunk(2, query, meta_analysis, papers_summary_str, detail_level=detail_level),
-            generate_document_chunk(3, query, meta_analysis, papers_summary_str, detail_level=detail_level),
-            _gen_algorithm_chunk(query, meta_analysis, papers_summary_str, detail_level),
+            generate_document_chunk(1, query, meta_analysis, papers_summary_str, detail_level=detail_level, language=language),
+            generate_document_chunk(2, query, meta_analysis, papers_summary_str, detail_level=detail_level, language=language),
+            generate_document_chunk(3, query, meta_analysis, papers_summary_str, detail_level=detail_level, language=language),
+            _gen_algorithm_chunk(query, meta_analysis, papers_summary_str, detail_level, language=language),
             return_exceptions=True
         )
     finally:
@@ -636,7 +655,7 @@ async def run_writer_panel(
         raw_chunk4 = await generate_document_chunk(
             4, query, meta_analysis, papers_summary_str,
             inject_context=_CHUNK_SECTIONS_COVERED,
-            detail_level=detail_level
+            detail_level=detail_level, language=language
         )
     except Exception as e:
         logger.error(f"Error generando chunk 4: {e}")

@@ -918,6 +918,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const outputFormat = document.querySelector('input[name="output_format"]:checked')?.value || "both";
         const detailLevel = document.querySelector('input[name="detail_level"]:checked')?.value || "long";
+        const outputLanguage = document.querySelector('input[name="output_language"]:checked')?.value || "es";
 
         confirmFormatBtn.disabled = true;
         confirmFormatBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Iniciando análisis...`;
@@ -929,7 +930,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     "Content-Type": "application/json",
                     "X-Access-Password": localStorage.getItem("access_password") || ""
                 },
-                body: JSON.stringify({ output_format: outputFormat, detail_level: detailLevel })
+                body: JSON.stringify({ output_format: outputFormat, detail_level: detailLevel, output_language: outputLanguage })
             });
 
             if (!response.ok) throw new Error("Error al confirmar formato.");

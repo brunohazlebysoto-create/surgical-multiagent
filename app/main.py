@@ -131,6 +131,7 @@ class ConfirmRequest(BaseModel):
 class ConfirmFormatRequest(BaseModel):
     output_format: str = "both"   # "word", "pptx", "both"
     detail_level: str = "long"    # "short", "medium", "long", "very_detailed"
+    output_language: str = "es"   # "es", "en"
 
 class PipelineCancelled(Exception):
     """Señala que el usuario canceló la ejecución."""
@@ -253,6 +254,7 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
 
         output_format = global_runs[run_id]["output_format"]
         detail_level = global_runs[run_id]["detail_level"]
+        output_language = global_runs[run_id].get("output_language", "es")
 
         await event_queue.put({
             "agent": "Sistema", "role": "Analizador",
@@ -297,13 +299,13 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
         sections = {}
         if output_format in ("word", "both"):
             _ensure_not_cancelled(run_id)
-            sections = await run_writer_panel(meta_analysis, analyzed_papers, query, event_queue, detail_level=detail_level)
+            sections = await run_writer_panel(meta_analysis, analyzed_papers, query, event_queue, detail_level=detail_level, language=output_language)
 
         # Paso 5: Panel de Presentación (PowerPoint) — omitir si solo Word
         slides = []
         if output_format in ("pptx", "both"):
             _ensure_not_cancelled(run_id)
-            slides = await run_presenter_panel(meta_analysis, analyzed_papers, query, event_queue, detail_level=detail_level)
+            slides = await run_presenter_panel(meta_analysis, analyzed_papers, query, event_queue, detail_level=detail_level, language=output_language)
         
         # --- RENDERIZACIÓN DE ARCHIVOS ---
         run_dir = f"static/downloads/{run_id}"
@@ -546,6 +548,7 @@ async def confirm_format(run_id: str, request: ConfirmFormatRequest, _ = Depends
 
     valid_formats = {"word", "pptx", "both"}
     valid_levels = {"short", "medium", "long", "very_detailed"}
+    valid_langs = {"es", "en"}
     if request.output_format not in valid_formats:
         raise HTTPException(status_code=400, detail=f"output_format inválido. Use: {valid_formats}")
     if request.detail_level not in valid_levels:
@@ -553,6 +556,7 @@ async def confirm_format(run_id: str, request: ConfirmFormatRequest, _ = Depends
 
     global_runs[run_id]["output_format"] = request.output_format
     global_runs[run_id]["detail_level"] = request.detail_level
+    global_runs[run_id]["output_language"] = request.output_language if request.output_language in valid_langs else "es"
     global_runs[run_id]["format_trigger"].set()
 
     return {"status": "success"}

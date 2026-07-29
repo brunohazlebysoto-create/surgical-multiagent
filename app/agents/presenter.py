@@ -286,12 +286,21 @@ async def _presenter_heartbeat(queue, prog_agent):
     ))
 
 
+def _lang_instruction_pptx(language: str) -> str:
+    """Instrucción de idioma para la presentación."""
+    if (language or "es").lower().startswith("en"):
+        return ("\n    LANGUAGE: Generate ALL slide titles, bullets, tables and speaker_notes "
+                "in professional medical English. Keep author citations and DOIs as-is.\n")
+    return "\n    IDIOMA: Genera TODO el contenido de las diapositivas en español médico profesional.\n"
+
+
 async def run_presenter_panel(
     meta_analysis: Dict[str, Any],
     analyzed_papers: List[Dict[str, Any]],
     query: str,
     event_queue: asyncio.Queue,
-    detail_level: str = "long"
+    detail_level: str = "long",
+    language: str = "es"
 ) -> List[Dict[str, Any]]:
     """
     Ejecuta el Panel de Presentación (Paso 5).
@@ -444,6 +453,7 @@ async def run_presenter_panel(
       ]
     }}
     """
+    prompt_pptx_json += _lang_instruction_pptx(language)
 
     hb_task = asyncio.create_task(_presenter_heartbeat(event_queue, programador))
     try:
