@@ -185,6 +185,65 @@ def _clean_chunk_output(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Citation validator (anti-hallucination transparency)
+# ---------------------------------------------------------------------------
+
+# Estilo parentético completo: "(Apellido et al., 2021)" / "(Apellido, 2021)"
+_CITATION_RE = _re.compile(
+    r'\(([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ\-]+)(?:\s+(?:et\s+al\.?|y\s+cols?\.?|and\s+colleagues))?[,;]?\s*(\d{4})\)'
+)
+# Estilo narrativo: "Apellido et al. (2021)" / "Apellido (2021)" (autor fuera del paréntesis)
+_CITATION_NARRATIVE_RE = _re.compile(
+    r'([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ\-]+)\s+(?:et\s+al\.?|y\s+cols?\.?)?\s*\((\d{4})\)'
+)
+
+
+def _corpus_surnames(analyzed_papers: List[Dict[str, Any]]) -> set:
+    """Construye el conjunto de apellidos (primer autor y coautores) presentes en el corpus."""
+    surnames = set()
+    for p in analyzed_papers:
+        authors_raw = str(p.get("authors", ""))
+        # authors viene como "Apellido I, Apellido2 J, et al." — extraer tokens de apellido
+        for chunk in authors_raw.replace(" et al.", "").split(","):
+            token = chunk.strip().split(" ")[0].strip().lower()
+            if len(token) > 2:
+                surnames.add(token)
+    return surnames
+
+
+def _validate_citations(text: str, analyzed_papers: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Extrae las citas (Apellido et al., Año) del texto generado y las compara contra
+    los apellidos reales del corpus. Devuelve un resumen de validación (no altera el texto).
+    Sirve como control de transparencia anti-alucinación: reporta cuántas citas
+    corresponden a papers reales del corpus y cuántas no se reconocen.
+    """
+    valid_surnames = _corpus_surnames(analyzed_papers)
+    matches = _CITATION_RE.findall(text or "") + _CITATION_NARRATIVE_RE.findall(text or "")
+    total = len(matches)
+    recognized = 0
+    unrecognized = []
+    for surname, _year in matches:
+        if surname.lower() in valid_surnames:
+            recognized += 1
+        else:
+            unrecognized.append(surname)
+    # Deduplicar apellidos no reconocidos preservando orden
+    seen = set()
+    unique_unrecognized = []
+    for s in unrecognized:
+        if s.lower() not in seen:
+            seen.add(s.lower())
+            unique_unrecognized.append(s)
+    return {
+        "total": total,
+        "recognized": recognized,
+        "unrecognized_count": len(unrecognized),
+        "unrecognized_surnames": unique_unrecognized[:8],
+    }
+
+
+# ---------------------------------------------------------------------------
 # Chunk generation
 # ---------------------------------------------------------------------------
 
@@ -604,6 +663,25 @@ async def run_writer_panel(
         + "\n\n" + _build_apa_refs(analyzed_papers)
         + "\n\n" + _build_bibtex_refs(analyzed_papers)
     )
+
+    # ── VALIDACIÓN DE CITAS (control de transparencia anti-alucinación) ──────
+    full_manuscript = "\n\n".join(
+        v for k, v in sections.items() if k != "evidence_references"
+    ) + "\n\n" + cleaned_chunk4
+    citation_report = _validate_citations(full_manuscript, analyzed_papers)
+    if citation_report["total"] > 0:
+        pct = round(100 * citation_report["recognized"] / citation_report["total"])
+        msg = (
+            f"🔎 **Validación de citas**: {citation_report['recognized']}/{citation_report['total']} "
+            f"citas ({pct}%) corresponden a autores del corpus analizado."
+        )
+        if citation_report["unrecognized_count"] > 0:
+            ejemplos = ", ".join(citation_report["unrecognized_surnames"])
+            msg += (
+                f" Se detectaron {citation_report['unrecognized_count']} citas con apellidos no "
+                f"presentes en el corpus (ej.: {ejemplos}); revísalas antes de uso clínico."
+            )
+        await event_queue.put(auditor.format_log(msg, "write"))
 
     await event_queue.put(editor.format_log(
         "¡Manuscrito médico de más de 5000 palabras completado, auditado y aprobado! "

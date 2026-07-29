@@ -624,14 +624,33 @@ async def rerank_papers(
 # Search Panel (Paso 1)
 # ---------------------------------------------------------------------------
 
+async def _query_with_retry(query_fn, search_term: str, max_results: int, attempts: int = 2) -> List[Dict[str, Any]]:
+    """
+    Ejecuta una función de query de API con reintentos y backoff corto.
+    Maximiza el recall: un fallo transitorio de red no elimina una fuente entera.
+    Devuelve [] si todos los intentos fallan (nunca lanza).
+    """
+    for i in range(attempts):
+        try:
+            res = await query_fn(search_term, max_results=max_results)
+            if res:
+                return res
+            # Resultado vacío: reintentar una vez más por si fue un hipo transitorio
+        except Exception as e:
+            logger.warning(f"{getattr(query_fn, '__name__', 'API')} intento {i+1}/{attempts} falló: {e}")
+        if i < attempts - 1:
+            await asyncio.sleep(1.5 * (i + 1))
+    return []
+
+
 async def _run_apis(search_term: str) -> List[Dict[str, Any]]:
-    """Ejecuta las 5 APIs en paralelo y devuelve resultados deduplicados y filtrados."""
+    """Ejecuta las 5 APIs en paralelo (con reintentos) y devuelve resultados deduplicados."""
     results = await asyncio.gather(
-        query_pubmed(search_term, max_results=50),
-        query_semantic_scholar(search_term, max_results=50),
-        query_crossref(search_term, max_results=50),
-        query_openalex(search_term, max_results=50),
-        query_europe_pmc(search_term, max_results=50),
+        _query_with_retry(query_pubmed, search_term, 50),
+        _query_with_retry(query_semantic_scholar, search_term, 50),
+        _query_with_retry(query_crossref, search_term, 50),
+        _query_with_retry(query_openalex, search_term, 50),
+        _query_with_retry(query_europe_pmc, search_term, 50),
         return_exceptions=True
     )
     all_papers: List[Dict[str, Any]] = []
@@ -792,10 +811,38 @@ async def run_search_panel(query: str, event_queue: asyncio.Queue, use_reranking
                 existing_titles.add(title_key)
         logger.info(f"Total candidatos tras segunda búsqueda: {len(all_candidates)}")
 
-    # Notificar si la evidencia sigue siendo escasa
+    # ── FALLBACK DE BASE INTERNA ─────────────────────────────────────────
+    # Si las 5 APIs devolvieron muy poco (caída de red/APIs), completar con la
+    # biblioteca interna de papers de cirugía pediátrica para que el pipeline
+    # nunca se quede sin evidencia. Se marca la procedencia para transparencia.
+    if len(all_candidates) < 5:
+        try:
+            from app.core.database import search_fallback_database
+            fallback = search_fallback_database(query, limit=15)
+            existing_titles_fb = {(p.get("title") or "").lower()[:50] for p in all_candidates}
+            added = 0
+            for fp in fallback:
+                tkey = (fp.get("title") or "").lower()[:50]
+                if tkey and tkey not in existing_titles_fb:
+                    fp = dict(fp)
+                    fp["from_fallback_db"] = True
+                    all_candidates.append(fp)
+                    existing_titles_fb.add(tkey)
+                    added += 1
+            if added:
+                logger.info(f"Fallback DB añadió {added} papers (APIs devolvieron pocos resultados).")
+                await event_queue.put(critico.format_log(
+                    f"⚠️ Las APIs externas devolvieron pocos resultados. Complementé con **{added}** "
+                    f"artículos de la biblioteca interna de cirugía pediátrica para garantizar cobertura.",
+                    "search"
+                ))
+        except Exception as e:
+            logger.error(f"Fallback DB no disponible: {e}")
+
+    # Notificar si la evidencia sigue siendo escasa incluso tras el fallback
     if len(all_candidates) < 5:
         await event_queue.put(critico.format_log(
-            f"⚠️ **Evidencia limitada**: las APIs devolvieron {len(all_candidates)} artículos para "
+            f"⚠️ **Evidencia limitada**: se reunieron {len(all_candidates)} artículos para "
             f"'{query}'. Esto puede indicar que es un tema emergente, poco publicado o con terminología "
             f"muy especializada. El análisis continuará con los papers disponibles.",
             "search"
