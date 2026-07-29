@@ -105,13 +105,20 @@ async def call_gemini(
     json_parse_failures = 0
 
     async with _api_semaphore:
+        # Fix de race condition: en vez de leer/escribir el índice global DENTRO del bucle
+        # (lo que corrompe la rotación cuando varias llamadas concurren), tomamos una semilla
+        # única para esta llamada y rotamos un índice LOCAL. La semilla global solo se avanza
+        # una vez, en una sola sentencia sin await (atómica bajo el event loop de asyncio).
+        local_idx = _current_key_idx
+        _current_key_idx = (_current_key_idx + 1) % num_keys
+
         for attempt in range(max_quota_attempts):
-            key_idx = _current_key_idx % num_keys
+            key_idx = local_idx % num_keys
             api_key = keys_to_use[key_idx]
 
             if not api_key or "Placeholder" in api_key or api_key.startswith("KEY"):
                 logger.warning(f"Llave Gemini en el índice {key_idx} es un placeholder o está vacía. Rotando al instante...")
-                _current_key_idx = (_current_key_idx + 1) % num_keys
+                local_idx += 1
                 continue
 
             # streamGenerateContent + alt=sse: los tokens (pensamiento + salida) llegan de
@@ -137,7 +144,7 @@ async def call_gemini(
                                 f"Rotando... (Intento {attempt + 1}/{max_quota_attempts})"
                             )
                             consecutive_timeout_failures = 0  # 429 ≠ timeout, resetear contador
-                            _current_key_idx = (_current_key_idx + 1) % num_keys
+                            local_idx += 1
                             if (attempt + 1) % num_keys == 0:
                                 logger.info(f"Carrusel completo de {num_keys} llaves. Esperando {backoff}s...")
                                 await asyncio.sleep(backoff)
@@ -199,7 +206,7 @@ async def call_gemini(
             except httpx.HTTPStatusError as e:
                 logger.error(f"Error HTTP (Intento {attempt + 1}, Llave {key_idx}): {e.response.status_code}")
                 consecutive_timeout_failures += 1
-                _current_key_idx = (_current_key_idx + 1) % num_keys
+                local_idx += 1
                 if consecutive_timeout_failures >= max_timeout_failures:
                     raise Exception(f"Todas las claves devolvieron errores HTTP. Último: {e.response.status_code}")
                 if (attempt + 1) % num_keys == 0:
@@ -210,7 +217,7 @@ async def call_gemini(
                 # Timeout, DNS, conexión rechazada — fallar rápido
                 consecutive_timeout_failures += 1
                 logger.error(f"Error de red/timeout (Intento {attempt + 1}, Llave {key_idx}): {type(e).__name__}")
-                _current_key_idx = (_current_key_idx + 1) % num_keys
+                local_idx += 1
                 if consecutive_timeout_failures >= max_timeout_failures:
                     raise Exception(f"Timeout o error de red en todas las claves ({max_timeout_failures} intentos). Verifica conectividad y cuota.")
                 # Pausa breve antes de intentar la siguiente clave

@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from typing import List, Optional
 from fastapi import FastAPI, BackgroundTasks, HTTPException, UploadFile, File, Form, Depends, Header, Query
@@ -38,9 +39,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Build version (para el health check y verificación de deploy)
+BUILD_VERSION = "0616-D21"
+
 # Estructura para almacenar las ejecuciones activas
 # run_id -> {"event_queue": Queue, "docx_path": str, "pptx_path": str, "json_path": str, "step2_trigger": asyncio.Event, "papers_found": list, "uploaded_papers": list, "selected_dois": list}
 global_runs = {}
+
+# TTL para limpiar ejecuciones antiguas de la memoria (evita fuga de memoria en HF Spaces).
+# Cada run guarda su timestamp de creación en "created_at".
+_RUN_TTL_SECONDS = 2 * 60 * 60  # 2 horas
+
+
+def _sweep_stale_runs():
+    """
+    Elimina de global_runs las ejecuciones más antiguas que _RUN_TTL_SECONDS.
+    Se invoca al crear cada nuevo run — evita que la memoria crezca sin límite
+    en el contenedor efímero de HuggingFace Spaces.
+    """
+    now = time.time()
+    stale = [
+        rid for rid, info in list(global_runs.items())
+        if now - info.get("created_at", now) > _RUN_TTL_SECONDS
+    ]
+    for rid in stale:
+        try:
+            del global_runs[rid]
+            logger.info(f"Run {rid} eliminado de memoria por TTL ({_RUN_TTL_SECONDS}s).")
+        except KeyError:
+            pass
+    return len(stale)
+
 
 # Asegurar directorios estáticos de salida
 os.makedirs("static/downloads", exist_ok=True)
@@ -65,6 +94,27 @@ async def auth_check(password: Optional[str] = Query(None)):
     if password == ACCESS_PASSWORD:
         return {"status": "authenticated"}
     return {"status": "unauthorized"}
+
+
+@app.get("/api/health")
+async def health_check():
+    """
+    Estado del servidor: versión de build, claves de servidor disponibles y ejecuciones activas.
+    Útil para verificar rápidamente que un deploy quedó activo y con qué build.
+    """
+    from app.core.config import GEMINI_API_KEYS as _SERVER_KEYS, GEMINI_MODEL as _MODEL
+    real_keys = [
+        k for k in (_SERVER_KEYS or [])
+        if k and "Placeholder" not in k and not k.startswith("KEY")
+    ]
+    return {
+        "status": "ok",
+        "build": BUILD_VERSION,
+        "default_model": _MODEL,
+        "server_keys_available": len(real_keys),
+        "active_runs": len(global_runs),
+        "password_protected": bool(ACCESS_PASSWORD),
+    }
 
 class PipelineConfig(BaseModel):
     reranking: bool = True
@@ -372,6 +422,9 @@ async def start_pipeline(
     """
     Endpoint para iniciar el pipeline asíncronamente en segundo plano.
     """
+    # Limpiar ejecuciones antiguas de la memoria antes de crear una nueva
+    _sweep_stale_runs()
+
     run_id = str(uuid.uuid4())
     event_queue = asyncio.Queue()
 
@@ -381,6 +434,7 @@ async def start_pipeline(
         "pptx_path": None,
         "json_path": None,
         "query": request.query,
+        "created_at": time.time(),
         "step2_trigger": asyncio.Event(),
         "format_trigger": asyncio.Event(),
         "papers_found": [],
@@ -592,21 +646,29 @@ async def stream_events(run_id: str, _ = Depends(verify_access)):
         raise HTTPException(status_code=404, detail="Ejecución no encontrada")
         
     queue = global_runs[run_id]["event_queue"]
-    
+
     async def event_generator():
+        # Keepalive: si no llega ningún evento en 15s, enviar un comentario SSE (línea que
+        # empieza con ':') para que proxies (HuggingFace, CDN) no corten la conexión inactiva.
+        # Los pasos largos (redacción, presentación) pueden tardar minutos sin emitir logs.
         while True:
             try:
-                # Esperar nuevos eventos de la cola de logs
-                event = await queue.get()
-                yield f"data: {json.dumps(event)}\n\n"
-                
-                # Si el evento es completado o fallado, cerrar el stream
-                if event.get("stage") in ["completed", "failed"]:
-                    break
+                event = await asyncio.wait_for(queue.get(), timeout=15.0)
+            except asyncio.TimeoutError:
+                yield ": keepalive\n\n"
+                continue
             except Exception as e:
                 logger.error(f"Error en el generador de eventos SSE: {e}")
                 break
-                
+
+            try:
+                yield f"data: {json.dumps(event)}\n\n"
+                if event.get("stage") in ["completed", "failed"]:
+                    break
+            except Exception as e:
+                logger.error(f"Error serializando evento SSE: {e}")
+                break
+
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @app.get("/api/downloads/{run_id}/{file_type}")
