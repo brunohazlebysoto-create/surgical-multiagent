@@ -53,6 +53,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const queryInput = document.getElementById("query-input");
     const startBtn = document.getElementById("start-btn");
+    const cancelBtn = document.getElementById("cancel-btn");
     const clearBtn = document.getElementById("clear-console-btn");
     const connectionStatus = document.getElementById("connection-status");
     const consoleStream = document.getElementById("console-stream");
@@ -1027,6 +1028,7 @@ document.addEventListener("DOMContentLoaded", () => {
         saveSearchHistory(query);
         showGlobalProgress();
         updateGlobalProgress("search");
+        if (cancelBtn) cancelBtn.style.display = "inline-flex";
 
         // 1. Limpieza de UI
         clearConsole();
@@ -1334,6 +1336,27 @@ document.addEventListener("DOMContentLoaded", () => {
     function resetControls() {
         startBtn.disabled = false;
         startBtn.innerHTML = `<i class="fa-solid fa-play"></i> Iniciar Consenso`;
+        if (cancelBtn) cancelBtn.style.display = "none";
         stopTicker();
+    }
+
+    // --- Cancelar ejecución en curso ---
+    if (cancelBtn) {
+        cancelBtn.addEventListener("click", async () => {
+            if (!currentRunId) return;
+            cancelBtn.disabled = true;
+            cancelBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Cancelando...`;
+            try {
+                await fetch(`/api/cancel/${currentRunId}`, {
+                    method: "POST",
+                    headers: { "X-Access-Password": localStorage.getItem("access_password") || "" }
+                });
+            } catch (e) {
+                console.error("Error al cancelar:", e);
+            } finally {
+                cancelBtn.disabled = false;
+                cancelBtn.innerHTML = `<i class="fa-solid fa-stop"></i> Cancelar`;
+            }
+        });
     }
 });

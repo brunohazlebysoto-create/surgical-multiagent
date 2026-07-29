@@ -82,19 +82,46 @@ def _is_clinical_paper(title: str, abstract: str) -> bool:
     return True
 
 
+def _normalize_doi(doi: str) -> str:
+    """Normaliza un DOI para comparación: minúsculas, sin prefijos de URL ni espacios."""
+    d = (doi or "").lower().strip()
+    for prefix in ("https://doi.org/", "http://doi.org/", "doi:"):
+        if d.startswith(prefix):
+            d = d[len(prefix):]
+    return d.strip()
+
+
+def _normalize_title(title: str) -> str:
+    """
+    Normaliza un título para deduplicación difusa: minúsculas, sin puntuación,
+    espacios colapsados. Detecta duplicados que difieren solo en formato/puntuación
+    (mismo paper indexado distinto en PubMed vs CrossRef vs OpenAlex).
+    """
+    t = (title or "").lower()
+    t = re.sub(r"[^a-z0-9áéíóúñü ]", " ", t)   # quitar puntuación y símbolos
+    t = re.sub(r"\s+", " ", t).strip()
+    return t[:80]   # 80 chars normalizados = huella robusta del título
+
+
 def _deduplicate(papers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Elimina duplicados por DOI exacto o por los primeros 50 caracteres del título."""
+    """
+    Elimina duplicados por DOI normalizado o por huella de título normalizada
+    (difusa: tolera diferencias de puntuación/formato entre fuentes).
+    """
     seen_dois: set = set()
     seen_titles: set = set()
     unique: List[Dict[str, Any]] = []
     for p in papers:
-        doi = (p.get("doi") or "").lower().strip()
-        title_key = (p.get("title") or "").lower().strip()[:50]
-        if (doi and doi in seen_dois) or title_key in seen_titles:
+        doi = _normalize_doi(p.get("doi", ""))
+        # No tratar los DOIs sintéticos (pubmed_/user_upload_) como colisionables por DOI
+        is_synthetic = doi.startswith("pubmed_") or doi.startswith("user_upload_")
+        title_key = _normalize_title(p.get("title", ""))
+        if (doi and not is_synthetic and doi in seen_dois) or (title_key and title_key in seen_titles):
             continue
-        if doi:
+        if doi and not is_synthetic:
             seen_dois.add(doi)
-        seen_titles.add(title_key)
+        if title_key:
+            seen_titles.add(title_key)
         unique.append(p)
     return unique
 

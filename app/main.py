@@ -132,6 +132,16 @@ class ConfirmFormatRequest(BaseModel):
     output_format: str = "both"   # "word", "pptx", "both"
     detail_level: str = "long"    # "short", "medium", "long", "very_detailed"
 
+class PipelineCancelled(Exception):
+    """Señala que el usuario canceló la ejecución."""
+
+
+def _ensure_not_cancelled(run_id: str):
+    """Lanza PipelineCancelled si el usuario pidió cancelar esta ejecución."""
+    if global_runs.get(run_id, {}).get("cancelled"):
+        raise PipelineCancelled()
+
+
 async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, run_id: str, client_keys: List[str] = None, pipeline_config: dict = None, gemini_model: str = None):
     """
     Orquesta el flujo del multi-agente.
@@ -191,8 +201,9 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
         # Esperar a que el usuario confirme mediante el endpoint /api/confirm
         logger.info(f"Pipeline {run_id} pausado, esperando selección de papers.")
         await global_runs[run_id]["step2_trigger"].wait()
+        _ensure_not_cancelled(run_id)
         logger.info(f"Pipeline {run_id} reanudado por confirmación del usuario.")
-        
+
         # Obtener papers seleccionados
         selected_dois = global_runs[run_id]["selected_dois"]
         all_available_papers = global_runs[run_id]["papers_found"] + global_runs[run_id]["uploaded_papers"]
@@ -237,6 +248,7 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
         })
         logger.info(f"Pipeline {run_id} esperando configuración de formato.")
         await global_runs[run_id]["format_trigger"].wait()
+        _ensure_not_cancelled(run_id)
         logger.info(f"Pipeline {run_id} reanudado con formato: {global_runs[run_id]['output_format']}, nivel: {global_runs[run_id]['detail_level']}")
 
         output_format = global_runs[run_id]["output_format"]
@@ -274,19 +286,23 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
                 logger.warning(f"Enriquecimiento de texto completo fallido (no fatal): {e}")
 
         # Paso 2: Panel de Análisis PICO-S (usando solo la selección)
+        _ensure_not_cancelled(run_id)
         analyzed_papers = await run_analyzer_panel(selected_papers, event_queue)
 
         # Paso 3: Panel de Meta-Análisis
+        _ensure_not_cancelled(run_id)
         meta_analysis = await run_meta_analyst_panel(analyzed_papers, query, event_queue)
 
         # Paso 4: Panel de Redacción Científica (Word) — omitir si solo PPT
         sections = {}
         if output_format in ("word", "both"):
+            _ensure_not_cancelled(run_id)
             sections = await run_writer_panel(meta_analysis, analyzed_papers, query, event_queue, detail_level=detail_level)
 
         # Paso 5: Panel de Presentación (PowerPoint) — omitir si solo Word
         slides = []
         if output_format in ("pptx", "both"):
+            _ensure_not_cancelled(run_id)
             slides = await run_presenter_panel(meta_analysis, analyzed_papers, query, event_queue, detail_level=detail_level)
         
         # --- RENDERIZACIÓN DE ARCHIVOS ---
@@ -356,12 +372,32 @@ async def execute_multiagent_pipeline(query: str, event_queue: asyncio.Queue, ru
             ]
         })
         
+    except PipelineCancelled:
+        logger.info(f"Pipeline {run_id} cancelado por el usuario.")
+        await event_queue.put({
+            "agent": "Sistema", "role": "Cancelado",
+            "color": "#f59e0b", "icon": "🛑", "stage": "failed",
+            "content": "⏹️ Análisis cancelado por el usuario. Puedes iniciar una nueva búsqueda cuando quieras."
+        })
     except Exception as e:
         logger.exception("Error durante la ejecución del pipeline")
+        # Mensaje de error más útil según el tipo de fallo (mejora #20)
+        err_str = str(e).lower()
+        if "api key" in err_str or "claves" in err_str or "no configurad" in err_str:
+            friendly = ("No hay claves de API de Gemini válidas. Abre ⚙️ Claves de API, "
+                        "agrega al menos una clave válida y usa 'Probar API' para verificarla.")
+        elif "429" in err_str or "quota" in err_str or "cuota" in err_str or "exhausted" in err_str:
+            friendly = ("Se agotó la cuota de todas las claves de Gemini (error 429). "
+                        "Espera unos minutos o agrega más claves en ⚙️ Claves de API.")
+        elif "timeout" in err_str or "red" in err_str or "conect" in err_str:
+            friendly = ("Problema de conectividad o timeout con la API. Verifica tu conexión "
+                        "y vuelve a intentar; el sistema reintenta automáticamente.")
+        else:
+            friendly = f"Ocurrió un error durante el análisis: {str(e)[:200]}"
         await event_queue.put({
             "agent": "Sistema", "role": "Error",
             "color": "#ef4444", "icon": "❌", "stage": "failed",
-            "content": f"Ocurrió un error crítico durante el análisis: {str(e)}"
+            "content": f"❌ {friendly}"
         })
     finally:
         gemini_keys_context.reset(token)
@@ -442,7 +478,8 @@ async def start_pipeline(
         "selected_dois": [],
         "extracted_images": [],
         "output_format": "both",
-        "detail_level": "long"
+        "detail_level": "long",
+        "cancelled": False
     }
 
     client_keys = [k.strip() for k in (x_gemini_api_keys or "").split(",") if k.strip()]
@@ -455,6 +492,32 @@ async def start_pipeline(
     )
 
     return {"run_id": run_id}
+
+
+@app.post("/api/cancel/{run_id}")
+async def cancel_pipeline(run_id: str, _ = Depends(verify_access)):
+    """
+    Marca una ejecución como cancelada. El pipeline se detiene en el próximo
+    punto de control de paso. También desbloquea cualquier espera de selección/formato.
+    """
+    if run_id not in global_runs:
+        raise HTTPException(status_code=404, detail="Ejecución no encontrada")
+
+    run = global_runs[run_id]
+    run["cancelled"] = True
+    # Desbloquear el pipeline si está esperando confirmación del usuario
+    run["step2_trigger"].set()
+    run["format_trigger"].set()
+    # Emitir evento de cancelación por si el pipeline está bloqueado en un paso largo
+    try:
+        await run["event_queue"].put({
+            "agent": "Sistema", "role": "Cancelado",
+            "color": "#f59e0b", "icon": "🛑", "stage": "failed",
+            "content": "⏹️ Cancelación solicitada. Deteniendo el análisis…"
+        })
+    except Exception:
+        pass
+    return {"status": "cancelled"}
 
 
 @app.post("/api/confirm/{run_id}")
